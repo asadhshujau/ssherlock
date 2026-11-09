@@ -1,6 +1,15 @@
 [package]
 name = "ssherlock"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
+rust-version = "1.85"
+description = "Rust SSH Client"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/asadhshujau/ssherlock"
+homepage = "https://github.com/asadhshujau/ssherlock"
+readme = "README.md"
+keywords = ["ssh", "terminal", "sftp", "client", "gpui"]
+categories = ["command-line-utilities", "network-programming"]
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE-*"]
 
 [dependencies]
