@@ -64,6 +64,12 @@ pub struct Colors {
     pub text_muted: Hsla,
     /// Brand and focus colour.
     pub accent: Hsla,
+    /// Text on top of `accent`, e.g. a primary button's label.
+    pub accent_text: Hsla,
+    /// Text of something that can't be used right now.
+    pub text_disabled: Hsla,
+    /// Dims the content behind a dialog.
+    pub modal_scrim: Hsla,
     /// Title bar of the focused window.
     pub title_bar: Hsla,
     /// Title bar of an unfocused window.
@@ -178,6 +184,10 @@ pub struct Metrics {
     pub scrollbar_width: Pixels,
     /// Width of the text field in a search bar.
     pub search_field_width: Pixels,
+    /// Width of a dialog.
+    pub modal_width: Pixels,
+    /// Narrowest a context menu gets.
+    pub menu_width: Pixels,
 }
 
 impl Theme {
@@ -200,6 +210,9 @@ impl Theme {
                 text: rgb(0x00e6_e8ec).into(),
                 text_muted: rgb(0x009a_a0ab).into(),
                 accent: rgb(0x00e0_a84a).into(),
+                accent_text: rgb(0x0016_181c).into(),
+                text_disabled: rgb(0x005f_6570).into(),
+                modal_scrim: rgba(0x0000_0080).into(),
                 title_bar: rgb(0x0016_181c).into(),
                 title_bar_inactive: rgb(0x001b_1d22).into(),
                 control_hover: rgba(0xffff_ff1a).into(),
@@ -254,7 +267,10 @@ impl Theme {
                 border: rgb(0x00d5_d7dd).into(),
                 text: rgb(0x001d_2026).into(),
                 text_muted: rgb(0x005c_6370).into(),
-                accent: rgb(0x00a8_6a00).into(),
+                accent: rgb(0x0099_6100).into(),
+                accent_text: rgb(0x00ff_ffff).into(),
+                text_disabled: rgb(0x00a0_a5ae).into(),
+                modal_scrim: rgba(0x0000_0040).into(),
                 title_bar: rgb(0x00eb_ecef).into(),
                 title_bar_inactive: rgb(0x00f2_f3f5).into(),
                 control_hover: rgba(0x0000_000f).into(),
@@ -287,7 +303,7 @@ impl Theme {
                 ],
                 foreground: rgb(0x001d_2026).into(),
                 background: rgb(0x00f7_f7f8).into(),
-                cursor: rgb(0x00a8_6a00).into(),
+                cursor: rgb(0x0099_6100).into(),
                 selection: rgba(0xa86a_0038).into(),
                 search_match: rgba(0x1778_8933).into(),
                 search_match_focused: rgba(0xc290_0066).into(),
@@ -351,6 +367,8 @@ impl Default for Metrics {
             tab_indicator: px(2.),
             scrollbar_width: px(6.),
             search_field_width: px(220.),
+            modal_width: px(480.),
+            menu_width: px(220.),
         }
     }
 }
@@ -446,6 +464,7 @@ mod tests {
                 ("inactive tab text", c.text_muted, c.tab_bar, 4.5),
                 ("hovered tab text", c.text_muted, c.tab_hover, 4.5),
                 ("muted text on background", c.text_muted, c.background, 4.5),
+                ("primary button label", c.accent_text, c.accent, 4.5),
                 ("muted text on title bar", c.text_muted, c.title_bar, 4.5),
                 (
                     "muted on inactive bar",
