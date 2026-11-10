@@ -18,7 +18,8 @@ use ssherlock_terminal::{
     CellSide, GridPoint, Link, Modifiers, MouseAction, MouseInput, MouseReporting, PtyExit,
     ScrollAmount, SearchDirection, SearchStatus, SelectionKind, ShellConfig, Snapshot,
     TerminalConfig, TerminalError, TerminalEvent, TerminalHandle, TerminalSize,
-    encode_alternate_scroll, encode_focus, encode_key, encode_mouse, encode_paste, spawn_local,
+    encode_alternate_scroll, encode_focus, encode_key, encode_mouse, encode_paste, is_multiline,
+    spawn_local,
 };
 
 use super::DefaultShell;
@@ -28,7 +29,9 @@ use super::actions::{
 };
 use super::element::{self, CellMetrics, PaintStyle};
 use super::keys::{self, KeyInput};
-use crate::components::{InputKind, TextInput, TextInputEvent};
+use crate::components::{
+    ContextMenu, InputKind, MenuDismissed, MenuItem, Modal, ModalEvent, TextInput, TextInputEvent,
+};
 use crate::platform;
 use crate::runtime::TokioHandle;
 use crate::theme::{ActiveTheme as _, Theme, from_rgb};
@@ -53,6 +56,13 @@ enum State {
     },
     /// The shell couldn't be started; the message says why.
     Failed(SharedString),
+}
+
+/// A multi-line paste waiting for the user to confirm it.
+struct PendingPaste {
+    text: String,
+    modal: Entity<Modal>,
+    _subscription: Subscription,
 }
 
 /// The open search bar.
@@ -87,6 +97,8 @@ pub struct TerminalView {
     last_mouse: Option<Point<Pixels>>,
     /// The latest link lookup; replacing it cancels the previous one.
     link_lookup: Option<Task<()>>,
+    pending_paste: Option<PendingPaste>,
+    context_menu: Option<(Entity<ContextMenu>, Subscription)>,
     _subscriptions: Vec<Subscription>,
     /// Background work owned by the view; dropping the view cancels it.
     tasks: Vec<Task<()>>,
@@ -129,6 +141,8 @@ impl TerminalView {
             hovered_link: None,
             last_mouse: None,
             link_lookup: None,
+            pending_paste: None,
+            context_menu: None,
             _subscriptions: subscriptions,
             tasks: Vec::new(),
         };
@@ -320,9 +334,9 @@ impl TerminalView {
         cx.stop_propagation();
     }
 
-    fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+    fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.paste_text(&text);
+            self.paste_text(text, window, cx);
         }
     }
 
@@ -360,11 +374,81 @@ impl TerminalView {
         .detach();
     }
 
-    fn paste_text(&self, text: &str) {
-        if let Some((_, snapshot)) = self.handle() {
-            let bytes = encode_paste(text, snapshot.modes);
+    /// Pastes `text`, first asking for confirmation if it has several lines and the program
+    /// hasn't turned on bracketed paste: then every line break presses Enter, so the lines run
+    /// as commands as soon as they arrive.
+    fn paste_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, snapshot)) = self.handle() else {
+            return;
+        };
+        if snapshot.modes.is_bracketed_paste() || !is_multiline(&text) {
+            let bytes = encode_paste(&text, snapshot.modes);
             self.write(bytes);
+            return;
         }
+
+        let (preview, more) = paste_preview(&text, PASTE_PREVIEW_LINES);
+        let lines = preview.len() + more;
+        let family = cx
+            .try_global::<MonoFamily>()
+            .map(|MonoFamily(family)| family.clone());
+        let modal = cx.new(|cx| {
+            Modal::new(
+                "Paste several lines?",
+                format!(
+                    "This pastes {lines} lines. Each line break runs what comes before it as a \
+                     command."
+                ),
+                "Paste",
+                window,
+                cx,
+            )
+            .detail(move |_, cx| paste_detail(&preview, more, family.clone(), cx))
+        });
+        let subscription = cx.subscribe_in(&modal, window, |view, _, event, window, cx| {
+            let pending = view.pending_paste.take();
+            if let (ModalEvent::Confirmed, Some(pending)) = (event, pending)
+                && let Some((_, snapshot)) = view.handle()
+            {
+                let bytes = encode_paste(&pending.text, snapshot.modes);
+                view.write(bytes);
+            }
+            view.focus_handle.focus(window);
+            cx.notify();
+        });
+        self.pending_paste = Some(PendingPaste {
+            text,
+            modal,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// Opens the right-click menu at `position`.
+    fn open_context_menu(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_selection = self
+            .handle()
+            .is_some_and(|(_, snapshot)| snapshot.selection.is_some());
+        let items = vec![
+            MenuItem::new("Copy", Copy).enabled(has_selection),
+            MenuItem::new("Paste", Paste),
+            MenuItem::new("Find", Find),
+            MenuItem::new("Clear Scrollback", ClearScrollback),
+            MenuItem::new("Reset Terminal", ResetTerminal),
+        ];
+        let target = self.focus_handle.clone();
+        let menu = cx.new(|cx| ContextMenu::new(items, position, target, window, cx));
+        let subscription = cx.subscribe(&menu, |view, _, _: &MenuDismissed, cx| {
+            view.context_menu = None;
+            cx.notify();
+        });
+        self.context_menu = Some((menu, subscription));
+        cx.notify();
     }
 
     /// The cell under `position`, if the grid has been laid out.
@@ -440,8 +524,12 @@ impl TerminalView {
             MouseButton::Left => self.start_selection(event, cx),
             MouseButton::Middle if platform::HAS_PRIMARY_SELECTION => {
                 if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
-                    self.paste_text(&text);
+                    self.paste_text(text, window, cx);
                 }
+                cx.stop_propagation();
+            }
+            MouseButton::Right => {
+                self.open_context_menu(event.position, window, cx);
                 cx.stop_propagation();
             }
             _ => {}
@@ -821,7 +909,79 @@ impl Render for TerminalView {
             .when_some(self.exit.as_ref(), |root, exit| {
                 root.child(exit_banner(exit, &theme))
             })
+            .when_some(self.pending_paste.as_ref(), |root, pending| {
+                root.child(pending.modal.clone())
+            })
+            .when_some(self.context_menu.as_ref(), |root, (menu, _)| {
+                root.child(menu.clone())
+            })
     }
+}
+
+/// Lines of a multi-line paste shown in its confirmation.
+const PASTE_PREVIEW_LINES: usize = 6;
+
+/// Longest preview line, in characters, before it is cut with an ellipsis.
+const PASTE_PREVIEW_WIDTH: usize = 80;
+
+/// The first `max` lines of `text` for a preview (each cut to [`PASTE_PREVIEW_WIDTH`]), and how
+/// many lines are left out. A final line break doesn't count as a line.
+fn paste_preview(text: &str, max: usize) -> (Vec<String>, usize) {
+    let text = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(text);
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|line| line.trim_end_matches('\r'))
+        .collect();
+    let shown = lines
+        .iter()
+        .take(max)
+        .map(|line| {
+            if line.chars().count() > PASTE_PREVIEW_WIDTH {
+                let cut: String = line.chars().take(PASTE_PREVIEW_WIDTH).collect();
+                format!("{cut}\u{2026}")
+            } else {
+                (*line).to_owned()
+            }
+        })
+        .collect();
+    (shown, lines.len().saturating_sub(max))
+}
+
+/// The preview box inside the paste confirmation.
+fn paste_detail(
+    lines: &[String],
+    more: usize,
+    family: Option<SharedString>,
+    cx: &App,
+) -> gpui::AnyElement {
+    let theme = cx.theme();
+    div()
+        .flex()
+        .flex_col()
+        .p(theme.spacing.md)
+        .rounded(theme.radius.sm)
+        .bg(theme.terminal.background)
+        .text_color(theme.terminal.foreground)
+        .text_size(theme.text.small_size)
+        .when_some(family, gpui::Styled::font_family)
+        .overflow_hidden()
+        .children(lines.iter().map(|line| {
+            div()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(SharedString::from(line.clone()))
+        }))
+        .when(more > 0, |d| {
+            d.child(
+                div()
+                    .text_color(theme.colors.text_muted)
+                    .child(format!("\u{2026} and {more} more")),
+            )
+        })
+        .into_any_element()
 }
 
 /// Where the link under the pointer goes, shown before it is opened: an `OSC 8` link's text
@@ -964,4 +1124,35 @@ fn exit_banner(exit: &PtyExit, theme: &Theme) -> impl IntoElement {
         .text_color(theme.colors.text_muted)
         .text_size(theme.text.small_size)
         .child(format!("Process {exit}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn paste_preview_shows_the_first_lines() {
+        let cases = [
+            ("two lines", "ls\npwd", 6, (vec!["ls", "pwd"], 0)),
+            (
+                "trailing newline ignored",
+                "ls\npwd\n",
+                6,
+                (vec!["ls", "pwd"], 0),
+            ),
+            ("crlf", "ls\r\npwd\r\n", 6, (vec!["ls", "pwd"], 0)),
+            ("more than shown", "1\n2\n3\n4", 2, (vec!["1", "2"], 2)),
+        ];
+        for (name, text, max, (lines, more)) in cases {
+            let expected: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+            assert_eq!(paste_preview(text, max), (expected, more), "{name}");
+        }
+
+        let long = "x".repeat(PASTE_PREVIEW_WIDTH + 5);
+        let cut = format!("{}\u{2026}", "x".repeat(PASTE_PREVIEW_WIDTH));
+        let (shown, _) = paste_preview(&format!("{long}\nb"), 6);
+        assert_eq!(shown, vec![cut, "b".to_owned()]);
+    }
 }
