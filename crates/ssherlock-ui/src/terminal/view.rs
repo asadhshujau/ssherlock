@@ -7,20 +7,21 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, EventEmitter, FocusHandle, Focusable, Global,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    App, AppContext as _, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable,
+    Global, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollDelta,
     ScrollWheelEvent, SharedString, Styled as _, Subscription, Task, WeakEntity, Window, canvas,
     div,
 };
 use ssherlock_terminal::{
-    Modifiers, MouseAction, MouseInput, MouseReporting, PtyExit, ShellConfig, Snapshot,
-    TerminalConfig, TerminalEvent, TerminalHandle, TerminalSize, encode_alternate_scroll,
-    encode_focus, encode_key, encode_mouse, encode_paste, spawn_local,
+    CellSide, GridPoint, Modifiers, MouseAction, MouseInput, MouseReporting, PtyExit,
+    SelectionKind, ShellConfig, Snapshot, TerminalConfig, TerminalEvent, TerminalHandle,
+    TerminalSize, encode_alternate_scroll, encode_focus, encode_key, encode_mouse, encode_paste,
+    spawn_local,
 };
 
 use super::DefaultShell;
-use super::actions::Paste;
+use super::actions::{Copy, Paste};
 use super::element::{self, CellMetrics, PaintStyle};
 use super::keys::{self, KeyInput};
 use crate::platform;
@@ -63,6 +64,8 @@ pub struct TerminalView {
     requested_size: Option<TerminalSize>,
     /// The mouse button held down, for reporting drags and releases.
     pressed_button: Option<ssherlock_terminal::MouseButton>,
+    /// A drag with the primary button is selecting text.
+    is_selecting: bool,
     /// Wheel movement smaller than a line, carried over to the next event.
     scroll_remainder: f32,
     _subscriptions: Vec<Subscription>,
@@ -101,6 +104,7 @@ impl TerminalView {
             grid_bounds: None,
             requested_size: None,
             pressed_button: None,
+            is_selecting: false,
             scroll_remainder: 0.,
             _subscriptions: subscriptions,
             tasks: Vec::new(),
@@ -294,22 +298,68 @@ impl TerminalView {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        let Some((_, snapshot)) = self.handle() else {
-            return;
-        };
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            return;
-        };
-        let bytes = encode_paste(&text, snapshot.modes);
-        self.write(bytes);
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.paste_text(&text);
+        }
     }
 
-    /// The cell under `position` and the snapshot it belongs to, if the grid has been laid out.
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        self.copy_selection(Clipboard::Main, cx);
+    }
+
+    /// Reads the selection from the terminal and puts it on `clipboard`.
+    fn copy_selection(&self, clipboard: Clipboard, cx: &mut Context<Self>) {
+        let Some((handle, _)) = self.handle() else {
+            return;
+        };
+        let request = match handle.selection_text() {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::warn!(%error, "could not read the selection");
+                return;
+            }
+        };
+        // Resolves as soon as the terminal's task answers, or with `None` if it stops, so the
+        // task can't outlive the view by more than that.
+        cx.spawn(async move |_, cx| {
+            let Some(text) = request.await else {
+                return;
+            };
+            let item = ClipboardItem::new_string(text);
+            let written = cx.update(|cx| match clipboard {
+                Clipboard::Main => cx.write_to_clipboard(item),
+                Clipboard::Primary => cx.write_to_primary(item),
+            });
+            if written.is_err() {
+                tracing::debug!("app closed before the selection was copied");
+            }
+        })
+        .detach();
+    }
+
+    fn paste_text(&self, text: &str) {
+        if let Some((_, snapshot)) = self.handle() {
+            let bytes = encode_paste(text, snapshot.modes);
+            self.write(bytes);
+        }
+    }
+
+    /// The cell under `position`, if the grid has been laid out.
     fn cell_at(&self, position: Point<Pixels>) -> Option<(usize, usize)> {
         let (_, snapshot) = self.handle()?;
         let metrics = self.metrics.as_ref()?;
         let bounds = self.grid_bounds?;
         Some(metrics.cell_at(position, bounds.origin, snapshot.rows(), snapshot.columns()))
+    }
+
+    /// The cell and side under `position`, for selecting.
+    fn selection_point(&self, position: Point<Pixels>) -> Option<(GridPoint, CellSide)> {
+        let (_, snapshot) = self.handle()?;
+        let metrics = self.metrics.as_ref()?;
+        let bounds = self.grid_bounds?;
+        let (row, column) = self.cell_at(position)?;
+        let side = metrics.side_at(position, bounds.origin, snapshot.columns());
+        Some((GridPoint::new(row, column), side))
     }
 
     /// Reports a mouse event to the program if it asked for mouse input. Shift bypasses
@@ -349,7 +399,41 @@ impl TerminalView {
         self.pressed_button = Some(button);
         if self.report_mouse(MouseAction::Press(button), event.position, event.modifiers) {
             cx.stop_propagation();
+            return;
         }
+        match event.button {
+            MouseButton::Left => self.start_selection(event, cx),
+            MouseButton::Middle if platform::HAS_PRIMARY_SELECTION => {
+                if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
+                    self.paste_text(&text);
+                }
+                cx.stop_propagation();
+            }
+            _ => {}
+        }
+    }
+
+    /// Starts selecting at the pointer: a drag selects characters, a double click words, a
+    /// triple click lines, and Alt/Option-drag a rectangle.
+    fn start_selection(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let Some((handle, _)) = self.handle() else {
+            return;
+        };
+        let Some((point, side)) = self.selection_point(event.position) else {
+            return;
+        };
+        let kind = match event.click_count {
+            2 => SelectionKind::Word,
+            n if n >= 3 => SelectionKind::Line,
+            _ if event.modifiers.alt => SelectionKind::Block,
+            _ => SelectionKind::Simple,
+        };
+        if let Err(error) = handle.start_selection(kind, point, side) {
+            tracing::warn!(%error, "could not start a selection");
+            return;
+        }
+        self.is_selecting = true;
+        cx.stop_propagation();
     }
 
     fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -357,6 +441,15 @@ impl TerminalView {
             return;
         };
         self.pressed_button = None;
+        if self.is_selecting && event.button == MouseButton::Left {
+            self.is_selecting = false;
+            // On X11 and Wayland, selecting is copying to the primary selection.
+            if platform::HAS_PRIMARY_SELECTION {
+                self.copy_selection(Clipboard::Primary, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         if self.report_mouse(
             MouseAction::Release(button),
             event.position,
@@ -366,7 +459,17 @@ impl TerminalView {
         }
     }
 
-    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_selecting && event.pressed_button == Some(MouseButton::Left) {
+            if let Some((handle, _)) = self.handle()
+                && let Some((point, side)) = self.selection_point(event.position)
+                && let Err(error) = handle.extend_selection(point, side)
+            {
+                tracing::warn!(%error, "could not extend the selection");
+            }
+            cx.stop_propagation();
+            return;
+        }
         let button = event.pressed_button.and(self.pressed_button);
         self.report_mouse(MouseAction::Move(button), event.position, event.modifiers);
     }
@@ -412,6 +515,15 @@ impl TerminalView {
         }
         cx.stop_propagation();
     }
+}
+
+/// Where copied text goes.
+#[derive(Clone, Copy, Debug)]
+enum Clipboard {
+    /// The clipboard that Copy and Paste use.
+    Main,
+    /// The X11/Wayland primary selection, filled by selecting and pasted with the middle button.
+    Primary,
 }
 
 fn terminal_modifiers(modifiers: gpui::Modifiers) -> Modifiers {
@@ -472,6 +584,7 @@ impl Render for TerminalView {
             .id("terminal")
             .key_context("Terminal")
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::paste))
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
@@ -503,6 +616,7 @@ impl Render for TerminalView {
                     metrics,
                     is_focused: self.focus_handle.is_focused(window),
                     cursor_thickness: theme.metrics.cursor_thickness,
+                    selection: theme.terminal.selection,
                 };
                 let root = root.child(grid(cx.weak_entity(), Arc::clone(snapshot), style));
                 match &self.exit {

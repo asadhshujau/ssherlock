@@ -11,7 +11,9 @@ use gpui::{
     App, BorderStyle, Bounds, Font, FontStyle, FontWeight, Hsla, Pixels, Point, SharedString,
     StrikethroughStyle, TextRun, UnderlineStyle, Window, fill, font, outline, point, px, size,
 };
-use ssherlock_terminal::{CellStyle, CursorShape, Rgb, Snapshot, SnapshotCell, TerminalSize};
+use ssherlock_terminal::{
+    CellSide, CellStyle, CursorShape, Rgb, Snapshot, SnapshotCell, TerminalSize,
+};
 
 use crate::theme::{Theme, from_rgb};
 
@@ -91,6 +93,24 @@ impl CellMetrics {
         )
     }
 
+    /// Which half of its cell `position` is over. Left of the grid counts as the left half of
+    /// the first column, right of it as the right half of the last.
+    pub fn side_at(
+        &self,
+        position: Point<Pixels>,
+        origin: Point<Pixels>,
+        columns: usize,
+    ) -> CellSide {
+        let cells = f32::from(position.x - origin.x) / f32::from(self.cell_width);
+        if !cells.is_finite() || cells < 0. {
+            CellSide::Left
+        } else if cells >= count(columns) || cells.fract() >= 0.5 {
+            CellSide::Right
+        } else {
+            CellSide::Left
+        }
+    }
+
     /// Top-left of the cell at `row`, `column`.
     fn cell_origin(&self, origin: Point<Pixels>, row: usize, column: usize) -> Point<Pixels> {
         point(
@@ -119,6 +139,8 @@ pub struct PaintStyle {
     pub is_focused: bool,
     /// Thickness of beam and underline cursors.
     pub cursor_thickness: Pixels,
+    /// Drawn behind selected text.
+    pub selection: Hsla,
 }
 
 /// Paints `snapshot` into `bounds`.
@@ -140,6 +162,17 @@ pub fn paint(
             window.paint_quad(fill(
                 Bounds::new(start, size(width, metrics.line_height)),
                 from_rgb(run.color),
+            ));
+        }
+        if let Some(columns) = snapshot
+            .selection
+            .and_then(|selection| selection.columns_on(row, snapshot.columns()))
+        {
+            let start = metrics.cell_origin(origin, row, *columns.start());
+            let width = metrics.cell_width * count(columns.count());
+            window.paint_quad(fill(
+                Bounds::new(start, size(width, metrics.line_height)),
+                style.selection,
             ));
         }
         for batch in text_batches(line) {
@@ -462,6 +495,22 @@ mod tests {
                 metrics.cell_at(point(px(x), px(y)), origin, 24, 80),
                 expected,
                 "({x}, {y})"
+            );
+        }
+        let sides = [
+            ("left of the grid", 4., CellSide::Left),
+            ("cell start", 5., CellSide::Left),
+            ("just before the middle", 9.9, CellSide::Left),
+            ("middle", 10., CellSide::Right),
+            ("cell end", 14.9, CellSide::Right),
+            ("next cell start", 15., CellSide::Left),
+            ("right of the grid", 2_000., CellSide::Right),
+        ];
+        for (name, x, expected) in sides {
+            assert_eq!(
+                metrics.side_at(point(px(x), px(9.)), origin, 80),
+                expected,
+                "{name}"
             );
         }
         assert_eq!(

@@ -8,6 +8,7 @@ use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 
 use crate::palette::Rgb;
+use crate::selection::VisibleSelection;
 
 /// The visible screen at one moment.
 #[derive(Clone, Debug, PartialEq)]
@@ -26,6 +27,8 @@ pub struct Snapshot {
     pub background: Rgb,
     /// Colour of the cursor.
     pub cursor_color: Rgb,
+    /// The selected text on screen, if any of the selection is visible.
+    pub selection: Option<VisibleSelection>,
 }
 
 impl Snapshot {

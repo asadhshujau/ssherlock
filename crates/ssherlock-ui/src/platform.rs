@@ -41,6 +41,10 @@ pub const ALT_KEY: AltKey = AltKey::Compose;
 #[cfg(not(target_os = "macos"))]
 pub const ALT_KEY: AltKey = AltKey::Meta;
 
+/// Whether the platform has a primary selection: selecting text copies it there and the middle
+/// button pastes it. X11 and Wayland have one; macOS and Windows don't.
+pub const HAS_PRIMARY_SELECTION: bool = cfg!(not(any(target_os = "macos", target_os = "windows")));
+
 /// The modifiers that `mod-` stands for in `keymap/default.json`.
 ///
 /// On macOS app shortcuts use Cmd. Elsewhere Ctrl alone belongs to the shell (Ctrl+C, Ctrl+W,
