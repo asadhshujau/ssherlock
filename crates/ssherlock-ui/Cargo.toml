@@ -13,6 +13,7 @@ anyhow = { workspace = true }
 gpui = { workspace = true }
 ssherlock-core = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
