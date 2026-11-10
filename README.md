@@ -4,8 +4,8 @@ A Rust SSH client. Hosts, keys, port forwarding, snippets, SFTP, sync — everyt
 SSH client should do, with no paid tier. Built with [gpui](https://crates.io/crates/gpui) and
 [russh](https://crates.io/crates/russh).
 
-> **Status: name reserved, nothing usable yet.** This release exists only to claim the crate name.
-> Follow [docs/PLAN.md](docs/PLAN.md) for the build order and [docs/FEATURES.md](docs/FEATURES.md)
+> **Status: early development (Phase 0, foundations).** Nothing usable yet: the app opens an empty
+> window. Follow [docs/PLAN.md](docs/PLAN.md) for the build order and [docs/FEATURES.md](docs/FEATURES.md)
 > for the full checklist.
 
 ## Principles
