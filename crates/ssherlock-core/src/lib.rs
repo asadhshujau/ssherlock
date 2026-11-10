@@ -8,6 +8,7 @@
 //! thing that failed. Nothing here wraps another workspace crate's error.
 #![forbid(unsafe_code)]
 
+pub mod app;
 pub mod id;
 pub mod secret;
 

@@ -6,12 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
-
-/// Reverse-DNS prefix of the app identifier; with the two names below it forms
-/// `io.github.asadhshujau.SSHerlock`, the macOS directory name and bundle id.
-const QUALIFIER: &str = "io.github";
-const ORGANISATION: &str = "asadhshujau";
-const APPLICATION: &str = "SSHerlock";
+use ssherlock_core::app;
 
 /// The platform directories SSHerlock writes to.
 ///
@@ -28,7 +23,7 @@ impl AppDirs {
     /// Returns `None` when the platform reports no home directory, which happens only in
     /// unusual sandboxes; callers then run without files rather than failing to start.
     pub fn resolve() -> Option<Self> {
-        ProjectDirs::from(QUALIFIER, ORGANISATION, APPLICATION).map(|dirs| Self {
+        ProjectDirs::from(app::QUALIFIER, app::ORGANISATION, app::NAME).map(|dirs| Self {
             data_local: dirs.data_local_dir().to_path_buf(),
         })
     }

@@ -20,6 +20,10 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    # Public-domain dedication. Used by hexf-parse and tiny-keccak (via gpui).
+    "CC0-1.0",
+    # University of Illinois/NCSA, the BSD-style LLVM licence. Used by libfuzzer-sys (via gpui).
+    "NCSA",
 ]
 confidence-threshold = 0.9
 # The list covers crates later phases add, so an allowance with no user yet is fine.
@@ -30,14 +34,21 @@ exceptions = [
     # MPL-2.0 is file-level copyleft: it covers only this crate's own (unmodified) files and
     # doesn't affect how SSHerlock is licensed. Pulled in by `directories` via `dirs-sys`.
     { crate = "option-ext", allow = ["MPL-2.0"] },
+    # Same reasoning; both come in through gpui. cbindgen is a build-time tool, dwrote the
+    # Windows DirectWrite bindings.
+    { crate = "cbindgen", allow = ["MPL-2.0"] },
+    { crate = "dwrote", allow = ["MPL-2.0"] },
 ]
 
 [licenses.private]
 ignore = false
 
 [bans]
-# gpui pulls in duplicate versions we can't control; warn instead of failing.
+# Duplicate versions are worth knowing about but not worth failing the build for.
 multiple-versions = "warn"
+# gpui's own tree carries dozens of duplicates we can't control; ignoring them keeps the
+# warning useful for duplicates we introduce.
+skip-tree = [{ crate = "gpui", reason = "duplicates inside gpui's dependency tree are upstream's" }]
 wildcards = "deny"
 # Internal path dependencies carry a version, so they aren't wildcards.
 allow-wildcard-paths = true
