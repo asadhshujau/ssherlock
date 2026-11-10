@@ -129,6 +129,10 @@ DISPLAY=:99 import -window root target/screenshot.png
 kill "$app" "$xvfb"
 ```
 
+Two things are expected under Xvfb and aren't bugs. There is no title bar, because no window
+manager is running, so gpui falls back to server-side decorations. The log also has a "Found no
+xinput mouse pointers" error, because Xvfb has no input devices.
+
 On macOS the app runs on the real display. `screencapture -x out.png` is built in; the app that
 runs it (your terminal or editor) needs the Screen Recording permission.
 
