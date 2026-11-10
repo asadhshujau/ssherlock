@@ -172,6 +172,7 @@ pub fn paint(
     window: &mut Window,
     cx: &mut App,
 ) {
+    let started = std::time::Instant::now();
     let metrics = &style.metrics;
     let origin = bounds.origin;
     let default_bg = snapshot.background;
@@ -294,6 +295,7 @@ pub fn paint(
             }
         }
     }
+    tracing::trace!(micros = started.elapsed().as_micros(), "painted terminal");
 }
 
 /// Where the scroll indicator's thumb goes, as fractions of the track: `(top, height)`.
