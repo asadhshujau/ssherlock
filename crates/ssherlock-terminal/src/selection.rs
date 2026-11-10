@@ -47,7 +47,7 @@ impl GridPoint {
 
 /// The part of a selection that is on the visible screen, start before end, both inclusive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct VisibleSelection {
+pub struct VisibleRange {
     /// First selected cell.
     pub start: GridPoint,
     /// Last selected cell.
@@ -56,7 +56,7 @@ pub struct VisibleSelection {
     pub is_block: bool,
 }
 
-impl VisibleSelection {
+impl VisibleRange {
     /// The selected columns on `row` of a screen `columns` wide, or `None` if nothing on that
     /// row is selected.
     pub fn columns_on(&self, row: usize, columns: usize) -> Option<RangeInclusive<usize>> {
@@ -92,16 +92,16 @@ mod tests {
 
     #[test]
     fn columns_on_each_row() {
-        let flowing = VisibleSelection {
+        let flowing = VisibleRange {
             start: GridPoint::new(1, 4),
             end: GridPoint::new(3, 2),
             is_block: false,
         };
-        let block = VisibleSelection {
+        let block = VisibleRange {
             is_block: true,
             ..flowing
         };
-        let one_row = VisibleSelection {
+        let one_row = VisibleRange {
             start: GridPoint::new(2, 3),
             end: GridPoint::new(2, 5),
             is_block: false,
@@ -119,7 +119,7 @@ mod tests {
         for (name, selection, row, expected) in cases {
             assert_eq!(selection.columns_on(row, 10), expected, "{name}");
         }
-        let past_edge = VisibleSelection {
+        let past_edge = VisibleRange {
             start: GridPoint::new(0, 12),
             end: GridPoint::new(0, 15),
             is_block: false,

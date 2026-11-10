@@ -17,10 +17,11 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use crate::error::TerminalError;
 use crate::palette::Palette;
 use crate::pty::{PtyInput, PtyIo, PtyOutput};
+use crate::search::SearchDirection;
 use crate::selection::{CellSide, GridPoint, SelectionKind};
 use crate::size::TerminalSize;
 use crate::snapshot::Snapshot;
-use crate::terminal::{Terminal, TerminalConfig, TerminalEvent};
+use crate::terminal::{ScrollAmount, Terminal, TerminalConfig, TerminalEvent};
 
 /// Commands queued for a terminal's task. Keystrokes are tiny and the task takes them as fast as
 /// they arrive; this absorbs a burst of key repeat or paste chunks while the task is busy
@@ -58,6 +59,12 @@ enum Command {
     ExtendSelection(GridPoint, CellSide),
     ClearSelection,
     SelectionText(oneshot::Sender<Option<String>>),
+    Scroll(ScrollAmount),
+    ClearScrollback,
+    Reset,
+    SetSearch(String),
+    SearchNext(SearchDirection),
+    ClearSearch,
 }
 
 impl TerminalHandle {
@@ -70,7 +77,7 @@ impl TerminalHandle {
         size: TerminalSize,
         runtime: &Handle,
     ) -> (Self, mpsc::Receiver<TerminalEvent>) {
-        let terminal = Terminal::new(config, size);
+        let mut terminal = Terminal::new(config, size);
         let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(terminal.snapshot()));
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel(EVENT_CAPACITY);
@@ -171,6 +178,61 @@ impl TerminalHandle {
         Ok(async move { answer.await.ok().flatten() })
     }
 
+    /// Scrolls the view through the scrollback.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn scroll(&self, amount: ScrollAmount) -> Result<(), TerminalError> {
+        self.send(Command::Scroll(amount))
+    }
+
+    /// Deletes the scrollback, keeping the screen.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn clear_scrollback(&self) -> Result<(), TerminalError> {
+        self.send(Command::ClearScrollback)
+    }
+
+    /// Resets the terminal as if newly started and deletes the scrollback.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn reset(&self) -> Result<(), TerminalError> {
+        self.send(Command::Reset)
+    }
+
+    /// Searches for `query` (literally; smart case), or ends the search if it is empty. The
+    /// snapshot shows the matches and the search's status.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn set_search(&self, query: impl Into<String>) -> Result<(), TerminalError> {
+        self.send(Command::SetSearch(query.into()))
+    }
+
+    /// Moves to the next search match in `direction`.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn search_next(&self, direction: SearchDirection) -> Result<(), TerminalError> {
+        self.send(Command::SearchNext(direction))
+    }
+
+    /// Ends the search.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn clear_search(&self) -> Result<(), TerminalError> {
+        self.send(Command::ClearSearch)
+    }
+
     /// The most recent snapshot.
     pub fn snapshot(&self) -> Arc<Snapshot> {
         Arc::clone(&self.snapshots.borrow())
@@ -251,7 +313,14 @@ impl Task {
 
     fn command(&mut self, command: Command) {
         match command {
-            Command::Write(bytes) => self.queue_input(PtyInput::Write(bytes)),
+            Command::Write(bytes) => {
+                // Typing jumps back to the live screen, so you see what you type.
+                if self.terminal.is_scrolled_back() {
+                    self.terminal.scroll(ScrollAmount::Bottom);
+                    self.is_dirty = true;
+                }
+                self.queue_input(PtyInput::Write(bytes));
+            }
             Command::Resize(size) => {
                 if size != self.terminal.size() {
                     self.terminal.resize(size);
@@ -273,6 +342,30 @@ impl Task {
             }
             Command::ClearSelection => {
                 self.terminal.clear_selection();
+                self.is_dirty = true;
+            }
+            Command::Scroll(amount) => {
+                self.terminal.scroll(amount);
+                self.is_dirty = true;
+            }
+            Command::ClearScrollback => {
+                self.terminal.clear_scrollback();
+                self.is_dirty = true;
+            }
+            Command::Reset => {
+                self.terminal.reset();
+                self.is_dirty = true;
+            }
+            Command::SetSearch(query) => {
+                self.terminal.set_search(&query);
+                self.is_dirty = true;
+            }
+            Command::SearchNext(direction) => {
+                self.terminal.search_next(direction);
+                self.is_dirty = true;
+            }
+            Command::ClearSearch => {
+                self.terminal.clear_search();
                 self.is_dirty = true;
             }
             Command::SelectionText(reply) => {
@@ -624,6 +717,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(within(handle.selection_text().unwrap()).await, None);
+    }
+
+    #[tokio::test]
+    async fn typing_scrolls_back_to_the_live_screen() {
+        let (handle, _events, peer) = start(TerminalSize::new(20, 3));
+        let text = (0..10).fold(String::new(), |text, i| text + &format!("line {i}\r\n"));
+        peer.output
+            .send(PtyOutput::Data(text.into_bytes()))
+            .await
+            .unwrap();
+        let mut rx = handle.subscribe();
+        within(rx.wait_for(|s| s.history_size == 8)).await.unwrap();
+
+        handle.scroll(ScrollAmount::Top).unwrap();
+        within(rx.wait_for(|s| s.display_offset == 8))
+            .await
+            .unwrap();
+        handle.write(b"x".to_vec()).unwrap();
+        within(rx.wait_for(|s| s.display_offset == 0))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn search_runs_in_the_task() {
+        let (handle, _events, peer) = start(TerminalSize::new(20, 3));
+        peer.output
+            .send(PtyOutput::Data(b"foo bar foo".to_vec()))
+            .await
+            .unwrap();
+        wait_for_row(&handle, "foo bar foo").await;
+
+        handle.set_search("foo").unwrap();
+        let mut rx = handle.subscribe();
+        within(rx.wait_for(|s| s.search_status.is_some_and(|st| st.current == Some(2))))
+            .await
+            .unwrap();
+        handle.search_next(SearchDirection::Older).unwrap();
+        within(rx.wait_for(|s| s.search_status.is_some_and(|st| st.current == Some(1))))
+            .await
+            .unwrap();
+        handle.clear_search().unwrap();
+        within(rx.wait_for(|s| s.search_status.is_none() && s.search_matches.is_empty()))
+            .await
+            .unwrap();
     }
 
     #[test]

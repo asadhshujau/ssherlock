@@ -6,24 +6,29 @@
 
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable,
-    Global, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollDelta,
-    ScrollWheelEvent, SharedString, Styled as _, Subscription, Task, WeakEntity, Window, canvas,
-    div,
+    App, AppContext as _, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, Global, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
+    ScrollDelta, ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, WeakEntity, Window, canvas, div,
 };
 use ssherlock_terminal::{
-    CellSide, GridPoint, Modifiers, MouseAction, MouseInput, MouseReporting, PtyExit,
-    SelectionKind, ShellConfig, Snapshot, TerminalConfig, TerminalEvent, TerminalHandle,
-    TerminalSize, encode_alternate_scroll, encode_focus, encode_key, encode_mouse, encode_paste,
-    spawn_local,
+    CellSide, GridPoint, Modifiers, MouseAction, MouseInput, MouseReporting, PtyExit, ScrollAmount,
+    SearchDirection, SearchStatus, SelectionKind, ShellConfig, Snapshot, TerminalConfig,
+    TerminalError, TerminalEvent, TerminalHandle, TerminalSize, encode_alternate_scroll,
+    encode_focus, encode_key, encode_mouse, encode_paste, spawn_local,
 };
 
 use super::DefaultShell;
-use super::actions::{Copy, Paste};
+use super::actions::{
+    ClearScrollback, Copy, DismissSearch, Find, Paste, ResetTerminal, ScrollLineDown, ScrollLineUp,
+    ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, SearchNewer, SearchOlder,
+};
 use super::element::{self, CellMetrics, PaintStyle};
 use super::keys::{self, KeyInput};
+use crate::components::{InputKind, TextInput, TextInputEvent};
 use crate::platform;
 use crate::runtime::TokioHandle;
 use crate::theme::{ActiveTheme as _, Theme, from_rgb};
@@ -50,6 +55,12 @@ enum State {
     Failed(SharedString),
 }
 
+/// The open search bar.
+struct SearchBar {
+    input: Entity<TextInput>,
+    _subscription: Subscription,
+}
+
 /// A terminal on screen.
 pub struct TerminalView {
     state: State,
@@ -68,6 +79,7 @@ pub struct TerminalView {
     is_selecting: bool,
     /// Wheel movement smaller than a line, carried over to the next event.
     scroll_remainder: f32,
+    search: Option<SearchBar>,
     _subscriptions: Vec<Subscription>,
     /// Background work owned by the view; dropping the view cancels it.
     tasks: Vec<Task<()>>,
@@ -106,6 +118,7 @@ impl TerminalView {
             pressed_button: None,
             is_selecting: false,
             scroll_remainder: 0.,
+            search: None,
             _subscriptions: subscriptions,
             tasks: Vec::new(),
         };
@@ -479,6 +492,7 @@ impl TerminalView {
             return;
         };
         let lines = match event.delta {
+            // Already in lines: the platform applies its own lines-per-notch (3 on X11).
             ScrollDelta::Lines(delta) => delta.y,
             ScrollDelta::Pixels(delta) => f32::from(delta.y) / f32::from(metrics.line_height),
         } + self.scroll_remainder;
@@ -510,10 +524,85 @@ impl TerminalView {
         } else if let Some(bytes) = encode_alternate_scroll(steps, modes) {
             self.write(bytes);
         } else {
-            // Scrolling the scrollback arrives with TERM-08.
-            return;
+            self.run(TerminalHandle::scroll, ScrollAmount::Lines(steps));
         }
         cx.stop_propagation();
+    }
+
+    /// Calls `command` on the running terminal with `argument`, logging a failure.
+    fn run<A>(&self, command: fn(&TerminalHandle, A) -> Result<(), TerminalError>, argument: A) {
+        if let Some((handle, _)) = self.handle()
+            && let Err(error) = command(handle, argument)
+        {
+            tracing::warn!(%error, "terminal command dropped");
+        }
+    }
+
+    fn scroll_line_up(&mut self, _: &ScrollLineUp, _: &mut Window, _: &mut Context<Self>) {
+        self.run(TerminalHandle::scroll, ScrollAmount::Lines(1));
+    }
+
+    fn scroll_line_down(&mut self, _: &ScrollLineDown, _: &mut Window, _: &mut Context<Self>) {
+        self.run(TerminalHandle::scroll, ScrollAmount::Lines(-1));
+    }
+
+    fn scroll_page_up(&mut self, _: &ScrollPageUp, _: &mut Window, _: &mut Context<Self>) {
+        self.run(TerminalHandle::scroll, ScrollAmount::PageUp);
+    }
+
+    fn scroll_page_down(&mut self, _: &ScrollPageDown, _: &mut Window, _: &mut Context<Self>) {
+        self.run(TerminalHandle::scroll, ScrollAmount::PageDown);
+    }
+
+    fn scroll_to_top(&mut self, _: &ScrollToTop, _: &mut Window, _: &mut Context<Self>) {
+        self.run(TerminalHandle::scroll, ScrollAmount::Top);
+    }
+
+    fn scroll_to_bottom(&mut self, _: &ScrollToBottom, _: &mut Window, _: &mut Context<Self>) {
+        self.run(TerminalHandle::scroll, ScrollAmount::Bottom);
+    }
+
+    fn clear_scrollback(&mut self, _: &ClearScrollback, _: &mut Window, _: &mut Context<Self>) {
+        self.run(|handle, ()| handle.clear_scrollback(), ());
+    }
+
+    fn reset_terminal(&mut self, _: &ResetTerminal, _: &mut Window, _: &mut Context<Self>) {
+        self.run(|handle, ()| handle.reset(), ());
+    }
+
+    /// Opens the search bar, or focuses it and selects its text if it is already open.
+    fn find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(search) = &self.search {
+            search.input.update(cx, TextInput::select_all);
+            search.input.focus_handle(cx).focus(window);
+            return;
+        }
+        let input = cx.new(|cx| TextInput::new("", InputKind::Persistent, window, cx));
+        let subscription = cx.subscribe(&input, |view, _, event: &TextInputEvent, _| {
+            if let TextInputEvent::Changed(query) = event {
+                view.run(TerminalHandle::set_search, query.clone());
+            }
+        });
+        self.search = Some(SearchBar {
+            input,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn search_older(&mut self, _: &SearchOlder, _: &mut Window, _: &mut Context<Self>) {
+        self.run(TerminalHandle::search_next, SearchDirection::Older);
+    }
+
+    fn search_newer(&mut self, _: &SearchNewer, _: &mut Window, _: &mut Context<Self>) {
+        self.run(TerminalHandle::search_next, SearchDirection::Newer);
+    }
+
+    fn dismiss_search(&mut self, _: &DismissSearch, window: &mut Window, cx: &mut Context<Self>) {
+        self.search = None;
+        self.run(|handle, ()| handle.clear_search(), ());
+        self.focus_handle.focus(window);
+        cx.notify();
     }
 }
 
@@ -580,12 +669,13 @@ impl Render for TerminalView {
             State::Running { snapshot, .. } => from_rgb(snapshot.background),
             State::Starting | State::Failed(_) => theme.terminal.background,
         };
-        let root = div()
+        // The grid takes keys and the mouse. The search bar sits beside it, not inside it, so
+        // typing in the search box never reaches the program. Actions from either bubble up to
+        // `root`.
+        let area = div()
             .id("terminal")
             .key_context("Terminal")
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::paste))
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::mouse_down))
@@ -595,17 +685,14 @@ impl Render for TerminalView {
             .on_mouse_up(MouseButton::Right, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_scroll_wheel(cx.listener(Self::scroll_wheel))
-            .relative()
             .flex()
             .flex_col()
-            .flex_1()
             .size_full()
             .p(theme.spacing.md)
             .bg(background);
-
-        match &self.state {
-            State::Starting => root,
-            State::Failed(message) => root.child(
+        let area = match &self.state {
+            State::Starting => area,
+            State::Failed(message) => area.child(
                 div()
                     .text_color(theme.terminal.foreground)
                     .text_size(theme.text.ui_size)
@@ -617,15 +704,122 @@ impl Render for TerminalView {
                     is_focused: self.focus_handle.is_focused(window),
                     cursor_thickness: theme.metrics.cursor_thickness,
                     selection: theme.terminal.selection,
+                    search_match: theme.terminal.search_match,
+                    search_match_focused: theme.terminal.search_match_focused,
+                    scrollbar: theme.colors.scrollbar,
+                    scrollbar_width: theme.metrics.scrollbar_width,
                 };
-                let root = root.child(grid(cx.weak_entity(), Arc::clone(snapshot), style));
-                match &self.exit {
-                    None => root,
-                    Some(exit) => root.child(exit_banner(exit, &theme)),
-                }
+                area.child(grid(cx.weak_entity(), Arc::clone(snapshot), style))
+            }
+        };
+        let status = match &self.state {
+            State::Running { snapshot, .. } => snapshot.search_status,
+            State::Starting | State::Failed(_) => None,
+        };
+
+        div()
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::scroll_line_up))
+            .on_action(cx.listener(Self::scroll_line_down))
+            .on_action(cx.listener(Self::scroll_page_up))
+            .on_action(cx.listener(Self::scroll_page_down))
+            .on_action(cx.listener(Self::scroll_to_top))
+            .on_action(cx.listener(Self::scroll_to_bottom))
+            .on_action(cx.listener(Self::clear_scrollback))
+            .on_action(cx.listener(Self::reset_terminal))
+            .on_action(cx.listener(Self::find))
+            .on_action(cx.listener(Self::search_older))
+            .on_action(cx.listener(Self::search_newer))
+            .on_action(cx.listener(Self::dismiss_search))
+            .relative()
+            .flex()
+            .flex_1()
+            .size_full()
+            .child(area)
+            .when_some(self.search.as_ref(), |root, search| {
+                root.child(search_bar(&search.input, status, &theme, cx))
+            })
+            .when_some(self.exit.as_ref(), |root, exit| {
+                root.child(exit_banner(exit, &theme))
+            })
+    }
+}
+
+/// The search box floating over the top-right corner of the terminal.
+fn search_bar(
+    input: &Entity<TextInput>,
+    status: Option<SearchStatus>,
+    theme: &Theme,
+    cx: &mut Context<TerminalView>,
+) -> impl IntoElement {
+    let has_query = !input.read(cx).text().is_empty();
+    let count = match status {
+        _ if !has_query => String::new(),
+        None => String::new(),
+        Some(SearchStatus { total: 0, .. }) => "No matches".to_owned(),
+        Some(SearchStatus {
+            total,
+            current,
+            is_capped,
+        }) => {
+            let more = if is_capped { "+" } else { "" };
+            match current {
+                Some(current) => format!("{current} of {total}{more}"),
+                None => format!("{total}{more} matches"),
             }
         }
-    }
+    };
+    let button = |id: &'static str, label: &'static str| {
+        let hover = theme.colors.control_hover;
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(theme.metrics.window_control_size)
+            .rounded(theme.radius.sm)
+            .text_color(theme.colors.text_muted)
+            .hover(move |style| style.bg(hover))
+            .child(label)
+    };
+
+    div()
+        .key_context("TerminalSearch")
+        .absolute()
+        .top(theme.spacing.md)
+        .right(theme.spacing.xl)
+        .flex()
+        .items_center()
+        .gap(theme.spacing.sm)
+        .px(theme.spacing.md)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.md)
+        .bg(theme.colors.surface)
+        .border(theme.metrics.border_width)
+        .border_color(theme.colors.border)
+        .text_size(theme.text.small_size)
+        .child(
+            div()
+                .w(theme.metrics.search_field_width)
+                .child(input.clone()),
+        )
+        .child(div().text_color(theme.colors.text_muted).child(count))
+        .child(
+            button("search-older", "\u{2191}").on_click(cx.listener(|view, _, window, cx| {
+                view.search_older(&SearchOlder, window, cx);
+            })),
+        )
+        .child(
+            button("search-newer", "\u{2193}").on_click(cx.listener(|view, _, window, cx| {
+                view.search_newer(&SearchNewer, window, cx);
+            })),
+        )
+        .child(
+            button("search-close", "\u{d7}").on_click(cx.listener(|view, _, window, cx| {
+                view.dismiss_search(&DismissSearch, window, cx);
+            })),
+        )
 }
 
 /// The painted grid. Reports its bounds back to the view so the terminal can be resized to fit
