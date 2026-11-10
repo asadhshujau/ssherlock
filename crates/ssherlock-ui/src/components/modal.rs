@@ -168,7 +168,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use gpui::{AppContext as _, TestAppContext};
+    use gpui::TestAppContext;
     use pretty_assertions::assert_eq;
 
     use super::*;
