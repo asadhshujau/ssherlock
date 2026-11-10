@@ -94,7 +94,7 @@ Work:
 - Hello window: title bar, one `div` saying "SSHerlock", theme tokens plumbed (no hard-coded colours even here).
 - `justfile` or `cargo xtask`: `fmt`, `lint`, `test`, `run`.
 - GitHub Actions: fmt + clippy + test on macOS and Linux (Linux gpui needs `libxkbcommon`, Wayland/X11 headers, Vulkan loader — listed in the README's *Development setup*; CI installs the same packages).
-- `docs/adr/0001-gpui.md`, `0002-russh.md`, `0003-sqlite.md` — three paragraphs each.
+- `docs/adr/0001-gpui.md`, `0002-russh.md`, `0003-sqlite.md` — three paragraphs each (plus `0004-nightly-rustfmt.md`).
 
 Exit: `cargo run` opens the window on macOS and on Linux; `just lint` passes with zero warnings; CI green.
 
