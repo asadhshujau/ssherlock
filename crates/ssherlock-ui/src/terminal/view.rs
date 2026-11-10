@@ -15,10 +15,10 @@ use gpui::{
     Subscription, Task, WeakEntity, Window, canvas, div,
 };
 use ssherlock_terminal::{
-    CellSide, GridPoint, Modifiers, MouseAction, MouseInput, MouseReporting, PtyExit, ScrollAmount,
-    SearchDirection, SearchStatus, SelectionKind, ShellConfig, Snapshot, TerminalConfig,
-    TerminalError, TerminalEvent, TerminalHandle, TerminalSize, encode_alternate_scroll,
-    encode_focus, encode_key, encode_mouse, encode_paste, spawn_local,
+    CellSide, GridPoint, Link, Modifiers, MouseAction, MouseInput, MouseReporting, PtyExit,
+    ScrollAmount, SearchDirection, SearchStatus, SelectionKind, ShellConfig, Snapshot,
+    TerminalConfig, TerminalError, TerminalEvent, TerminalHandle, TerminalSize,
+    encode_alternate_scroll, encode_focus, encode_key, encode_mouse, encode_paste, spawn_local,
 };
 
 use super::DefaultShell;
@@ -80,6 +80,13 @@ pub struct TerminalView {
     /// Wheel movement smaller than a line, carried over to the next event.
     scroll_remainder: f32,
     search: Option<SearchBar>,
+    /// The link under the pointer while the link modifier is held.
+    hovered_link: Option<Link>,
+    /// Where the pointer last was over the grid, to look for a link when the modifier is
+    /// pressed without moving.
+    last_mouse: Option<Point<Pixels>>,
+    /// The latest link lookup; replacing it cancels the previous one.
+    link_lookup: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
     /// Background work owned by the view; dropping the view cancels it.
     tasks: Vec<Task<()>>,
@@ -119,6 +126,9 @@ impl TerminalView {
             is_selecting: false,
             scroll_remainder: 0.,
             search: None,
+            hovered_link: None,
+            last_mouse: None,
+            link_lookup: None,
             _subscriptions: subscriptions,
             tasks: Vec::new(),
         };
@@ -406,6 +416,18 @@ impl TerminalView {
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
+        if event.button == MouseButton::Left
+            && platform::is_link_modifier(&event.modifiers)
+            && let Some(link) = &self.hovered_link
+        {
+            if link.is_safe_to_open() {
+                cx.open_url(&link.uri);
+            } else {
+                tracing::info!(uri = %link.uri, "not opening a link with an unsupported scheme");
+            }
+            cx.stop_propagation();
+            return;
+        }
         let Some(button) = terminal_button(event.button) else {
             return;
         };
@@ -473,6 +495,8 @@ impl TerminalView {
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.last_mouse = Some(event.position);
+        self.update_hovered_link(event.modifiers, cx);
         if self.is_selecting && event.pressed_button == Some(MouseButton::Left) {
             if let Some((handle, _)) = self.handle()
                 && let Some((point, side)) = self.selection_point(event.position)
@@ -527,6 +551,48 @@ impl TerminalView {
             self.run(TerminalHandle::scroll, ScrollAmount::Lines(steps));
         }
         cx.stop_propagation();
+    }
+
+    fn modifiers_changed(
+        &mut self,
+        event: &gpui::ModifiersChangedEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_hovered_link(event.modifiers, cx);
+    }
+
+    /// Looks for a link under the pointer while the link modifier is held, and forgets it
+    /// otherwise.
+    fn update_hovered_link(&mut self, modifiers: gpui::Modifiers, cx: &mut Context<Self>) {
+        let position = self
+            .last_mouse
+            .filter(|_| platform::is_link_modifier(&modifiers) && !self.is_selecting);
+        let request = position
+            .and_then(|position| self.cell_at(position))
+            .and_then(|(row, column)| {
+                let (handle, _) = self.handle()?;
+                handle.link_at(GridPoint::new(row, column)).ok()
+            });
+        let Some(request) = request else {
+            self.link_lookup = None;
+            if self.hovered_link.take().is_some() {
+                cx.notify();
+            }
+            return;
+        };
+        self.link_lookup = Some(cx.spawn(async move |this, cx| {
+            let link = request.await;
+            let updated = this.update(cx, |view, cx| {
+                if view.hovered_link != link {
+                    view.hovered_link = link;
+                    cx.notify();
+                }
+            });
+            if updated.is_err() {
+                tracing::debug!("terminal view closed during a link lookup");
+            }
+        }));
     }
 
     /// Calls `command` on the running terminal with `argument`, logging a failure.
@@ -684,7 +750,13 @@ impl Render for TerminalView {
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::mouse_up))
             .on_mouse_up(MouseButton::Right, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
+            .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .on_scroll_wheel(cx.listener(Self::scroll_wheel))
+            .cursor(if self.hovered_link.is_some() {
+                gpui::CursorStyle::PointingHand
+            } else {
+                gpui::CursorStyle::IBeam
+            })
             .flex()
             .flex_col()
             .size_full()
@@ -708,6 +780,9 @@ impl Render for TerminalView {
                     search_match_focused: theme.terminal.search_match_focused,
                     scrollbar: theme.colors.scrollbar,
                     scrollbar_width: theme.metrics.scrollbar_width,
+                    link: self.hovered_link.as_ref().map(|link| link.range),
+                    link_color: theme.colors.accent,
+                    link_thickness: theme.metrics.border_width,
                 };
                 area.child(grid(cx.weak_entity(), Arc::clone(snapshot), style))
             }
@@ -740,10 +815,44 @@ impl Render for TerminalView {
             .when_some(self.search.as_ref(), |root, search| {
                 root.child(search_bar(&search.input, status, &theme, cx))
             })
+            .when_some(self.hovered_link.as_ref(), |root, link| {
+                root.child(link_hint(link, &theme))
+            })
             .when_some(self.exit.as_ref(), |root, exit| {
                 root.child(exit_banner(exit, &theme))
             })
     }
+}
+
+/// Where the link under the pointer goes, shown before it is opened: an `OSC 8` link's text
+/// can say anything, so the real target is what the user decides on.
+fn link_hint(link: &Link, theme: &Theme) -> impl IntoElement {
+    let text = if link.is_safe_to_open() {
+        format!(
+            "{}+click to open {}",
+            platform::LINK_MODIFIER_NAME,
+            link.uri
+        )
+    } else {
+        format!("{} (not opened: unsupported link type)", link.uri)
+    };
+    div()
+        .absolute()
+        .bottom(theme.spacing.md)
+        .left(theme.spacing.md)
+        .max_w(theme.metrics.tab_max_width * 3.)
+        .px(theme.spacing.md)
+        .py(theme.spacing.xs)
+        .rounded(theme.radius.sm)
+        .bg(theme.colors.surface)
+        .border(theme.metrics.border_width)
+        .border_color(theme.colors.border)
+        .text_size(theme.text.small_size)
+        .text_color(theme.colors.text_muted)
+        .overflow_hidden()
+        .text_ellipsis()
+        .whitespace_nowrap()
+        .child(text)
 }
 
 /// The search box floating over the top-right corner of the terminal.
