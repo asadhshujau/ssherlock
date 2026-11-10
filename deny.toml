@@ -25,6 +25,13 @@ confidence-threshold = 0.9
 # The list covers crates later phases add, so an allowance with no user yet is fine.
 unused-allowed-license = "allow"
 
+# Per-crate exceptions for licences we don't allow in general.
+exceptions = [
+    # MPL-2.0 is file-level copyleft: it covers only this crate's own (unmodified) files and
+    # doesn't affect how SSHerlock is licensed. Pulled in by `directories` via `dirs-sys`.
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+]
+
 [licenses.private]
 ignore = false
 

@@ -12,6 +12,13 @@ keywords = ["ssh", "terminal", "sftp", "client", "gpui"]
 categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+directories = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
 ssherlock-core = { workspace = true }
 ssherlock-ui = { workspace = true }
 
