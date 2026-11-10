@@ -271,6 +271,7 @@ Logging: `tracing` macros only, with structured fields (`info!(host = %host.labe
 | HTTP | `reqwest` (rustls) |
 | Serial | `serialport` |
 | Testing | `pretty_assertions`, `insta` (snapshots), `proptest` (parsers) |
+| Version pins only (not used in code) | `libc` (see workspace `Cargo.toml` for why) |
 
 Anything not in this table needs a reason in the PR and an entry added here.
 
