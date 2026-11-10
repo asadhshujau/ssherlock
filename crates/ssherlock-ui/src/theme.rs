@@ -6,7 +6,10 @@
 
 use std::sync::LazyLock;
 
-use gpui::{App, Global, Hsla, Pixels, SharedString, WindowAppearance, px, rgb, rgba};
+use gpui::{App, Global, Hsla, Pixels, Rgba, SharedString, WindowAppearance, px, rgb, rgba};
+use ssherlock_terminal::{Palette, Rgb};
+
+use crate::platform;
 
 /// Whether a theme is meant for a light or a dark system appearance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +37,8 @@ pub struct Theme {
     pub appearance: Appearance,
     /// Colour tokens.
     pub colors: Colors,
+    /// Colours inside terminals.
+    pub terminal: TerminalColors,
     /// Gaps and padding.
     pub spacing: Spacing,
     /// Corner radii.
@@ -73,6 +78,21 @@ pub struct Colors {
     pub window_shadow: Hsla,
 }
 
+/// Colours inside a terminal: the 16 ANSI colours programs pick from, plus defaults.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalColors {
+    /// Black, red, green, yellow, blue, magenta, cyan, white, then their bright versions.
+    pub ansi: [Hsla; 16],
+    /// Default text.
+    pub foreground: Hsla,
+    /// Default background.
+    pub background: Hsla,
+    /// The cursor.
+    pub cursor: Hsla,
+    /// Behind selected text.
+    pub selection: Hsla,
+}
+
 /// Spacing scale for gaps and padding.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spacing {
@@ -110,6 +130,12 @@ pub struct Typography {
     pub small_size: Pixels,
     /// Large headline text.
     pub display_size: Pixels,
+    /// Monospace families for terminals, most preferred first; the first one installed is used.
+    pub mono_families: &'static [&'static str],
+    /// Terminal text size.
+    pub terminal_size: Pixels,
+    /// Terminal line height as a multiple of `terminal_size`.
+    pub terminal_line_height: f32,
 }
 
 /// Fixed sizes of window chrome and controls.
@@ -126,6 +152,8 @@ pub struct Metrics {
     pub window_inset: Pixels,
     /// Width of hairline borders.
     pub border_width: Pixels,
+    /// Thickness of the beam and underline terminal cursors.
+    pub cursor_thickness: Pixels,
 }
 
 impl Theme {
@@ -155,6 +183,30 @@ impl Theme {
                 control_close_text: rgb(0x00ff_ffff).into(),
                 window_shadow: rgba(0x0000_0066).into(),
             },
+            terminal: TerminalColors {
+                ansi: [
+                    rgb(0x0030_333b).into(),
+                    rgb(0x00e8_6b6b).into(),
+                    rgb(0x009c_c97e).into(),
+                    rgb(0x00e0_c078).into(),
+                    rgb(0x0066_a8ea).into(),
+                    rgb(0x00c5_86d9).into(),
+                    rgb(0x005c_bec7).into(),
+                    rgb(0x00b4_b9c2).into(),
+                    rgb(0x0062_6874).into(),
+                    rgb(0x00f2_8585).into(),
+                    rgb(0x00b1_dc94).into(),
+                    rgb(0x00ef_d392).into(),
+                    rgb(0x0082_bcf5).into(),
+                    rgb(0x00d7_a0e8).into(),
+                    rgb(0x0078_d2da).into(),
+                    rgb(0x00ee_f0f3).into(),
+                ],
+                foreground: rgb(0x00e6_e8ec).into(),
+                background: rgb(0x001b_1d22).into(),
+                cursor: rgb(0x00e0_a84a).into(),
+                selection: rgba(0xe0a8_4a4d).into(),
+            },
             spacing: Spacing::default(),
             radius: Radius::default(),
             text: Typography::default(),
@@ -179,6 +231,30 @@ impl Theme {
                 control_close_hover: rgb(0x00c4_2b1c).into(),
                 control_close_text: rgb(0x00ff_ffff).into(),
                 window_shadow: rgba(0x0000_0040).into(),
+            },
+            terminal: TerminalColors {
+                ansi: [
+                    rgb(0x001d_2026).into(),
+                    rgb(0x00c2_3a32).into(),
+                    rgb(0x0037_7d2c).into(),
+                    rgb(0x0086_5d00).into(),
+                    rgb(0x002c_5fbf).into(),
+                    rgb(0x0093_3caf).into(),
+                    rgb(0x0017_7889).into(),
+                    rgb(0x00c8_cbd2).into(),
+                    rgb(0x005c_6370).into(),
+                    rgb(0x00d8_4a40).into(),
+                    rgb(0x0048_9339).into(),
+                    rgb(0x00a0_7200).into(),
+                    rgb(0x003f_74d6).into(),
+                    rgb(0x00a9_52c6).into(),
+                    rgb(0x0023_8ea1).into(),
+                    rgb(0x00ff_ffff).into(),
+                ],
+                foreground: rgb(0x001d_2026).into(),
+                background: rgb(0x00f7_f7f8).into(),
+                cursor: rgb(0x00a8_6a00).into(),
+                selection: rgba(0xa86a_0038).into(),
             },
             spacing: Spacing::default(),
             radius: Radius::default(),
@@ -217,6 +293,9 @@ impl Default for Typography {
             ui_size: px(14.),
             small_size: px(12.),
             display_size: px(28.),
+            mono_families: platform::MONO_FAMILIES,
+            terminal_size: px(14.),
+            terminal_line_height: 1.25,
         }
     }
 }
@@ -229,8 +308,45 @@ impl Default for Metrics {
             window_control_glyph: px(10.),
             window_inset: px(10.),
             border_width: px(1.),
+            cursor_thickness: px(2.),
         }
     }
+}
+
+impl Theme {
+    /// The terminal colours in the form the terminal emulator takes.
+    pub fn terminal_palette(&self) -> Palette {
+        let t = &self.terminal;
+        Palette {
+            ansi: t.ansi.map(to_rgb),
+            foreground: to_rgb(t.foreground),
+            background: to_rgb(t.background),
+            cursor: to_rgb(t.cursor),
+        }
+    }
+}
+
+/// An opaque 8-bit colour from a token; alpha is dropped because terminal colours are opaque.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "each channel is clamped to 0..=1 and scaled to 0..=255 before the cast"
+)]
+fn to_rgb(color: Hsla) -> Rgb {
+    let Rgba { r, g, b, .. } = color.to_rgb();
+    let channel = |c: f32| (c.clamp(0., 1.) * 255.).round() as u8;
+    Rgb::new(channel(r), channel(g), channel(b))
+}
+
+/// A colour from the terminal emulator as a gpui colour.
+pub fn from_rgb(color: Rgb) -> Hsla {
+    Rgba {
+        r: f32::from(color.r) / 255.,
+        g: f32::from(color.g) / 255.,
+        b: f32::from(color.b) / 255.,
+        a: 1.,
+    }
+    .into()
 }
 
 impl Global for Theme {}
@@ -307,6 +423,53 @@ mod tests {
                     theme.appearance
                 );
             }
+        }
+    }
+
+    #[test]
+    fn terminal_colours_are_readable_in_both_themes() {
+        for theme in [Theme::dark(), Theme::light()] {
+            let t = &theme.terminal;
+            let ratio = contrast(t.foreground, t.background);
+            assert!(
+                ratio >= 7.0,
+                "{:?}: foreground {ratio:.2}",
+                theme.appearance
+            );
+            // Red, green, yellow, blue, magenta, cyan and their bright versions are used for
+            // text on the default background.
+            for (index, color) in t.ansi.iter().enumerate() {
+                if matches!(index, 0 | 7 | 8 | 15) {
+                    continue;
+                }
+                let ratio = contrast(*color, t.background);
+                assert!(
+                    ratio >= 3.0,
+                    "{:?}: ansi {index} contrast {ratio:.2} < 3",
+                    theme.appearance
+                );
+            }
+            assert!(
+                contrast(t.cursor, t.background) >= 3.0,
+                "{:?}: cursor",
+                theme.appearance
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_palette_round_trips_through_rgb() {
+        let theme = Theme::dark();
+        let palette = theme.terminal_palette();
+        assert_eq!(palette.background, Rgb::from_hex(0x1b_1d22));
+        assert_eq!(palette.ansi[1], Rgb::from_hex(0xe8_6b6b));
+        assert_eq!(palette.cursor, Rgb::from_hex(0xe0_a84a));
+        for rgb in [
+            Rgb::new(0, 0, 0),
+            Rgb::new(255, 255, 255),
+            Rgb::new(18, 52, 86),
+        ] {
+            assert_eq!(to_rgb(from_rgb(rgb)), rgb);
         }
     }
 

@@ -4,8 +4,11 @@
 //! live in `ssherlock-core` and I/O lives in the service and store crates.
 #![forbid(unsafe_code)]
 
+pub mod keymap;
 pub mod main_window;
+pub mod platform;
 pub mod runtime;
+pub mod terminal;
 pub mod theme;
 mod window_frame;
 
@@ -22,6 +25,9 @@ pub fn init(tokio: tokio::runtime::Handle, cx: &mut App) {
     cx.set_global(Theme::for_appearance(Appearance::from_window(
         cx.window_appearance(),
     )));
+    terminal::init(cx);
+    // Last, so every feature's actions exist when their bindings are built.
+    keymap::init(cx);
 
     // Closing the last window quits, on every platform. Lives as long as the app, so detached.
     cx.on_window_closed(|cx| {
@@ -37,6 +43,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use gpui::TestAppContext;
+    use ssherlock_terminal::{ShellConfig, ShellProgram};
 
     use super::*;
 
@@ -50,6 +57,15 @@ mod tests {
             init(runtime.handle().clone(), cx);
             assert!(cx.has_global::<Theme>());
             assert!(cx.has_global::<TokioHandle>());
+            // Never start the user's real shell from a test: this program doesn't exist, so
+            // the terminal shows its "could not start" message instead.
+            cx.set_global(terminal::DefaultShell(ShellConfig {
+                program: ShellProgram::Command {
+                    program: "/nonexistent/ssherlock-test-shell".into(),
+                    args: Vec::new(),
+                },
+                ..ShellConfig::default()
+            }));
 
             open_main_window(cx).unwrap();
             assert_eq!(cx.windows().len(), 1);

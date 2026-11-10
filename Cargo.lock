@@ -5332,7 +5332,10 @@ dependencies = [
  "anyhow",
  "gpui",
  "pretty_assertions",
+ "serde",
+ "serde_json",
  "ssherlock-core",
+ "ssherlock-terminal",
  "tokio",
  "tracing",
 ]
