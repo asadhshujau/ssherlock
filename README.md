@@ -132,11 +132,14 @@ for opener in xdg-open gio gnome-open kde-open wslview; do
   chmod +x "$sandbox/stubs/$opener"
 done
 Xvfb :99 -screen 0 1280x800x24 & xvfb=$!
+sleep 1   # let the display come up
 env -u WAYLAND_DISPLAY DISPLAY=:99 HOME="$sandbox" XDG_DATA_HOME="$sandbox/share" SHELL=/bin/sh \
   DBUS_SESSION_BUS_ADDRESS=disabled: PATH="$sandbox/stubs:$PATH" \
   VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./target/debug/ssherlock & app=$!
-sleep 3
+DISPLAY=:99 xdotool search --sync --name SSHerlock   # wait for the window
+sleep 2   # first frame: software Vulkan compiles its shaders
 DISPLAY=:99 xdotool type 'echo hello' && DISPLAY=:99 xdotool key Return
+sleep 1
 DISPLAY=:99 import -window root target/screenshot.png
 kill "$app" "$xvfb"
 ```
