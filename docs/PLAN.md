@@ -71,8 +71,8 @@ Progress (update in the PR that changes a phase's status):
 
 | Phase | Status |
 |-------|--------|
-| 0 — Foundations | in progress |
-| 1 — Terminal core | not started |
+| 0 — Foundations | done (window checked by hand on GNOME Wayland; macOS by CI) |
+| 1 — Terminal core | next |
 | 2 — SSH core | not started |
 | 3 — Hosts, groups & storage | not started |
 | 4 – 14 | not started |

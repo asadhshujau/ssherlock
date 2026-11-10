@@ -1,7 +1,7 @@
 //! The main application window and its root view.
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, IntoElement, ParentElement, Render, Styled,
+    App, AppContext as _, Bounds, Context, IntoElement, ParentElement, Pixels, Render, Styled,
     Subscription, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, div, px,
     size,
 };
@@ -58,15 +58,26 @@ impl Render for MainWindow {
 
 /// Opens the main window.
 ///
-/// Server-side decorations are requested; compositors that don't offer them (GNOME on Wayland)
-/// fall back to the frame drawn by [`window_frame`].
-///
 /// # Errors
 ///
 /// Fails if the platform can't create a window, e.g. when no display server is reachable.
 pub fn open_main_window(cx: &mut App) -> anyhow::Result<()> {
     let bounds = Bounds::centered(None, size(px(DEFAULT_WIDTH), px(DEFAULT_HEIGHT)), cx);
-    let options = WindowOptions {
+    cx.open_window(main_window_options(bounds), |window, cx| {
+        tracing::info!(decorations = ?window.window_decorations(), "main window opened");
+        cx.new(|cx| MainWindow::new(window, cx))
+    })?;
+    Ok(())
+}
+
+/// Options for the main window at `bounds`.
+///
+/// Client-side decorations are requested so that on Linux we always draw the frame in
+/// [`window_frame`] ourselves. Asking for server-side ones left GNOME on Wayland with no title
+/// bar at all: Mutter doesn't offer them, yet gpui still reported `Decorations::Server`. macOS
+/// ignores this option and keeps its native title bar.
+fn main_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+    WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
             title: Some(app::NAME.into()),
@@ -74,11 +85,25 @@ pub fn open_main_window(cx: &mut App) -> anyhow::Result<()> {
         }),
         app_id: Some(app::ID.to_owned()),
         window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
-        window_decorations: Some(WindowDecorations::Server),
+        window_decorations: Some(WindowDecorations::Client),
         ..WindowOptions::default()
-    };
-    cx.open_window(options, |window, cx| {
-        cx.new(|cx| MainWindow::new(window, cx))
-    })?;
-    Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{point, px, size};
+
+    use super::*;
+
+    /// Regression: requesting server-side decorations left GNOME on Wayland without a title bar.
+    #[test]
+    fn main_window_requests_client_side_decorations() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(800.), px(600.)));
+        let options = main_window_options(bounds);
+        assert!(matches!(
+            options.window_decorations,
+            Some(WindowDecorations::Client)
+        ));
+    }
 }

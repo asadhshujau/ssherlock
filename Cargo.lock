@@ -5201,6 +5201,7 @@ dependencies = [
  "pretty_assertions",
  "ssherlock-core",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

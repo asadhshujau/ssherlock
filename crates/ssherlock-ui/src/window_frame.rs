@@ -1,8 +1,9 @@
 //! Window chrome for compositors that make the app draw its own (client-side decorations).
 //!
-//! macOS, Windows and most X11/KDE setups draw the title bar for us. GNOME on Wayland doesn't, so
-//! there gpui reports [`Decorations::Client`] and we draw a title bar, window controls, a shadow
-//! and invisible resize grips around the content.
+//! The main window asks for client-side decorations, so on Linux (X11 and Wayland alike) gpui
+//! reports [`Decorations::Client`] and we draw a title bar, window controls, a shadow and
+//! invisible resize grips around the content. macOS keeps its native title bar and reports
+//! [`Decorations::Server`], which gets a plain root.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
