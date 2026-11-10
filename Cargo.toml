@@ -46,7 +46,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 # JSON is the settings and import/export format.
 serde_json = "1.0.154"
 # SecretString / SecretBox so secrets can't be logged or copied by accident.
-secrecy = { version = "0.10.3", features = ["serde"] }
+secrecy = "0.10.3"
 # Wipe buffers that held key material.
 zeroize = "1.9.1"
 # Readable diffs in test assertions.
