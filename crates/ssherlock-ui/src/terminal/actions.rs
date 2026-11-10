@@ -34,5 +34,11 @@ actions!(
         SearchNewer,
         /// Closes the search bar and clears the highlights.
         DismissSearch,
+        /// Makes terminal text one step larger, in every terminal.
+        ZoomIn,
+        /// Makes terminal text one step smaller, in every terminal.
+        ZoomOut,
+        /// Returns terminal text to the theme's size.
+        ResetZoom,
     ]
 );
