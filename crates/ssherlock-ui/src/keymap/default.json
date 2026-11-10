@@ -26,12 +26,25 @@
       "mod-up": "terminal::ScrollLineUp",
       "mod-down": "terminal::ScrollLineDown",
       "mod-k": "terminal::ClearScrollback",
-      "mod-alt-r": "terminal::ResetTerminal",
       "mod-f": "terminal::Find",
       "secondary-=": "terminal::ZoomIn",
       "secondary-+": "terminal::ZoomIn",
       "secondary--": "terminal::ZoomOut",
       "secondary-0": "terminal::ResetZoom"
+    }
+  },
+  {
+    "context": "Terminal",
+    "os": ["macos"],
+    "bindings": {
+      "cmd-alt-r": "terminal::ResetTerminal"
+    }
+  },
+  {
+    "context": "Terminal",
+    "os": ["linux", "windows"],
+    "bindings": {
+      "ctrl-shift-delete": "terminal::ResetTerminal"
     }
   },
   {

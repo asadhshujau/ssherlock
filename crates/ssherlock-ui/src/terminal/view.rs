@@ -436,6 +436,7 @@ impl TerminalView {
     /// Reads the selection from the terminal and puts it on `clipboard`.
     fn copy_selection(&self, clipboard: Clipboard, cx: &mut Context<Self>) {
         let Some((handle, _)) = self.handle() else {
+            tracing::debug!(?clipboard, "not copying: the terminal isn't running");
             return;
         };
         let request = match handle.selection_text() {
@@ -449,8 +450,15 @@ impl TerminalView {
         // task can't outlive the view by more than that.
         cx.spawn(async move |_, cx| {
             let Some(text) = request.await else {
+                tracing::debug!(?clipboard, "nothing selected to copy");
                 return;
             };
+            // The length only: the text itself may be a secret printed in the terminal.
+            tracing::debug!(
+                ?clipboard,
+                chars = text.chars().count(),
+                "copying the selection"
+            );
             let item = ClipboardItem::new_string(text);
             let written = cx.update(|cx| match clipboard {
                 Clipboard::Main => cx.write_to_clipboard(item),
