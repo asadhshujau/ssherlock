@@ -113,15 +113,27 @@ sudo dnf install xorg-x11-server-Xvfb xdotool ImageMagick xclip     # Fedora
 sudo pacman -S xorg-server-xvfb xdotool imagemagick xclip           # Arch
 ```
 
-Run it sandboxed, so neither the app nor the shell it starts reads or writes your real
-configuration. The app writes logs under `XDG_DATA_HOME`, and its terminal runs `$SHELL` as a
-login shell:
+Run it sandboxed, so nothing reaches your real session:
+
+- `HOME`, `XDG_DATA_HOME` and `SHELL` keep the app's logs and its login shell away from your
+  configuration.
+- `DBUS_SESSION_BUS_ADDRESS=disabled:` cuts the app off from your desktop's session bus.
+  Otherwise "open this link" goes through the desktop portal, which opens it in your real
+  browser.
+- Stub `xdg-open`/`gio`/… scripts first on `PATH` catch the fallback openers. They log what
+  would have been opened, so you can check it.
 
 ```sh
 cargo build -p ssherlock
 sandbox=$(mktemp -d)
+mkdir "$sandbox/stubs"
+for opener in xdg-open gio gnome-open kde-open wslview; do
+  printf '#!/bin/sh\necho "$*" >> "%s/opened.log"\n' "$sandbox" > "$sandbox/stubs/$opener"
+  chmod +x "$sandbox/stubs/$opener"
+done
 Xvfb :99 -screen 0 1280x800x24 & xvfb=$!
 env -u WAYLAND_DISPLAY DISPLAY=:99 HOME="$sandbox" XDG_DATA_HOME="$sandbox/share" SHELL=/bin/sh \
+  DBUS_SESSION_BUS_ADDRESS=disabled: PATH="$sandbox/stubs:$PATH" \
   VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./target/debug/ssherlock & app=$!
 sleep 3
 DISPLAY=:99 xdotool type 'echo hello' && DISPLAY=:99 xdotool key Return
@@ -129,9 +141,10 @@ DISPLAY=:99 import -window root target/screenshot.png
 kill "$app" "$xvfb"
 ```
 
-Two things are expected under Xvfb and aren't bugs. There is no title bar, because no window
-manager is running, so gpui falls back to server-side decorations. The log also has a "Found no
-xinput mouse pointers" error, because Xvfb has no input devices.
+Three things are expected under Xvfb and aren't bugs. There is no title bar, because no window
+manager is running, so gpui falls back to server-side decorations. The log has a "Found no
+xinput mouse pointers" error, because Xvfb has no input devices. Opening a link logs "Failed to
+open with dbus", because the bus is disabled on purpose.
 
 On macOS the app runs on the real display. `screencapture -x out.png` is built in; the app that
 runs it (your terminal or editor) needs the Screen Recording permission.
