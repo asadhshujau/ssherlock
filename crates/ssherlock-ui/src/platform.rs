@@ -2,6 +2,29 @@
 //! (CLAUDE.md §7): which modifier app shortcuts use, what Alt/Option does in a terminal, and
 //! which monospace fonts to look for.
 
+use serde::Deserialize;
+
+/// An operating system, for keymap sections that apply to only some (`"os": ["macos"]`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Os {
+    /// macOS.
+    Macos,
+    /// Linux and the BSDs, which share its desktops and conventions.
+    Linux,
+    /// Windows.
+    Windows,
+}
+
+/// The operating system this build is for.
+pub const OS: Os = if cfg!(target_os = "macos") {
+    Os::Macos
+} else if cfg!(target_os = "windows") {
+    Os::Windows
+} else {
+    Os::Linux
+};
+
 /// Monospace font families to try for terminals, most preferred first.
 #[cfg(target_os = "macos")]
 pub const MONO_FAMILIES: &[&str] = &["SF Mono", "Menlo", "Monaco", "Courier New"];
