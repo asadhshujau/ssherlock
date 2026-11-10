@@ -1,0 +1,9 @@
+[
+  {
+    "context": "Terminal",
+    "bindings": {
+      "mod-v": "terminal::Paste",
+      "shift-insert": "terminal::Paste"
+    }
+  }
+]

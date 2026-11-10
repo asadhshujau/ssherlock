@@ -11,7 +11,10 @@ homepage.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 gpui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 ssherlock-core = { workspace = true }
+ssherlock-terminal = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
