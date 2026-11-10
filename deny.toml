@@ -1,0 +1,41 @@
+# cargo-deny configuration. Run with `just deny`.
+
+[graph]
+all-features = true
+
+[advisories]
+# Unmaintained crates are reported only when we depend on them directly; transitive ones
+# are outside our control and show up through the dependency that pulls them in.
+unmaintained = "workspace"
+
+[licenses]
+# Permissive licences only. Add one here only after checking it is compatible with
+# MIT OR Apache-2.0 distribution, with a comment saying which crate needs it.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+# The list covers crates later phases add, so an allowance with no user yet is fine.
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = false
+
+[bans]
+# gpui pulls in duplicate versions we can't control; warn instead of failing.
+multiple-versions = "warn"
+wildcards = "deny"
+# Internal path dependencies carry a version, so they aren't wildcards.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

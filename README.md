@@ -21,11 +21,12 @@ SSHerlock is developed on macOS and Linux. Do this once before building.
 ### 1. Rust toolchain
 
 Install stable Rust with [rustup](https://rustup.rs). The minimum is **1.89**, which is what
-`rusqlite` needs. Add the components the checks use:
+`rusqlite` needs. You also need nightly **rustfmt** for formatting only: `rustfmt.toml` uses
+import-grouping options that stable rustfmt ignores. Building and testing use stable.
 
 ```sh
-rustup toolchain install stable
-rustup component add rustfmt clippy
+rustup toolchain install stable --component rustfmt,clippy
+rustup toolchain install nightly --profile minimal --component rustfmt
 ```
 
 ### 2. Cargo tools

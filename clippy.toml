@@ -1,0 +1,2 @@
+# Words `doc_markdown` should not ask us to wrap in backticks. ".." keeps clippy's defaults.
+doc-valid-idents = ["SSHerlock", "OpenSSH", ".."]

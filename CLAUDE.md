@@ -236,7 +236,7 @@ Every crate root: `#![forbid(unsafe_code)]`. Tests may `#![allow(clippy::unwrap_
 Before every commit (`just check` runs all of these):
 
 ```sh
-cargo fmt --all -- --check
+cargo +nightly fmt --all -- --check   # nightly: rustfmt.toml uses nightly-only import options
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo deny check

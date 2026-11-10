@@ -1,0 +1,5 @@
+# `imports_granularity` and `group_imports` are nightly-only, so format with
+# `cargo +nightly fmt` (`just fmt` does this). Everything else is default rustfmt.
+edition = "2024"
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"

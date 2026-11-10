@@ -5,3 +5,39 @@ version = 4
 [[package]]
 name = "ssherlock"
 version = "0.0.1"
+dependencies = [
+ "ssherlock-core",
+ "ssherlock-ui",
+]
+
+[[package]]
+name = "ssherlock-core"
+version = "0.0.1"
+
+[[package]]
+name = "ssherlock-ssh"
+version = "0.0.1"
+dependencies = [
+ "ssherlock-core",
+]
+
+[[package]]
+name = "ssherlock-store"
+version = "0.0.1"
+dependencies = [
+ "ssherlock-core",
+]
+
+[[package]]
+name = "ssherlock-terminal"
+version = "0.0.1"
+dependencies = [
+ "ssherlock-core",
+]
+
+[[package]]
+name = "ssherlock-ui"
+version = "0.0.1"
+dependencies = [
+ "ssherlock-core",
+]

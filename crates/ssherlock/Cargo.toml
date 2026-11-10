@@ -1,0 +1,19 @@
+[package]
+name = "ssherlock"
+description = "A desktop SSH client built with gpui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["ssh", "terminal", "sftp", "client", "gpui"]
+categories = ["command-line-utilities", "network-programming"]
+
+[dependencies]
+ssherlock-core = { workspace = true }
+ssherlock-ui = { workspace = true }
+
+[lints]
+workspace = true

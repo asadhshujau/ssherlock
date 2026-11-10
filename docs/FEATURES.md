@@ -204,11 +204,11 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 ## 12. App & platform (APP)
 
-- [ ] **APP-01** macOS, Linux and Windows builds from one gpui codebase (Free)
+- [~] **APP-01** macOS, Linux and Windows builds from one gpui codebase (Free)
 - [ ] **APP-02** Settings UI plus `settings.json` with hot reload (Free)
 - [ ] **APP-03** Command palette for every action (Free)
 - [ ] **APP-04** Customisable keymap, keymap file (Free)
-- [ ] **APP-05** Light / dark / system appearance, app themes (Free)
+- [~] **APP-05** Light / dark / system appearance, app themes (Free)
 - [ ] **APP-06** Restore windows, tabs and sessions on launch (Pro)
 - [ ] **APP-07** Desktop notifications: disconnect, transfer finished, bell in background (Free)
 - [ ] **APP-08** Auto-update with signed releases (Free)
