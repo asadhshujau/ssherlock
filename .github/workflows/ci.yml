@@ -1,10 +1,20 @@
 # Runs what `just check` runs, on both platforms SSHerlock is developed on.
 name: CI
 
+# Changes that touch only these paths can't affect the build, so they don't start a run. A change
+# that touches anything else as well still runs CI in full.
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE-*"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE-*"
 
 permissions:
   contents: read
