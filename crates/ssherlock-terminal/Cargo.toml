@@ -10,10 +10,16 @@ homepage.workspace = true
 
 [dependencies]
 alacritty_terminal = { workspace = true }
+portable-pty = { workspace = true }
 ssherlock-core = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [lints]
 workspace = true
