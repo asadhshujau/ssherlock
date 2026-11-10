@@ -93,6 +93,45 @@ just check   # fmt, clippy, tests and cargo-deny; run this before every commit
 Read [CLAUDE.md](CLAUDE.md) before writing code. It holds the engineering rules every change
 follows.
 
+### 6. Checking the UI headlessly (optional; for AI assistants and CI)
+
+Tests can't tell whether the terminal *looks* right. If an AI coding assistant works on this
+repo, give it a way to launch the app, drive it and look at a screenshot without your desktop.
+On Linux that is a virtual X display. gpui renders into it with Mesa's software Vulkan driver
+(lavapipe, from `mesa-vulkan-drivers` above), so no GPU is needed.
+
+| Tool | Used for |
+|------|----------|
+| `xvfb` | a virtual X display to run the app in |
+| `xdotool` | typing keys and clicking |
+| `imagemagick` | `import` takes the screenshot |
+| `xclip` | putting text on the clipboard, to test paste |
+
+```sh
+sudo apt install xvfb xdotool imagemagick xclip                     # Debian, Ubuntu
+sudo dnf install xorg-x11-server-Xvfb xdotool ImageMagick xclip     # Fedora
+sudo pacman -S xorg-server-xvfb xdotool imagemagick xclip           # Arch
+```
+
+Run it sandboxed, so neither the app nor the shell it starts reads or writes your real
+configuration. The app writes logs under `XDG_DATA_HOME`, and its terminal runs `$SHELL` as a
+login shell:
+
+```sh
+cargo build -p ssherlock
+sandbox=$(mktemp -d)
+Xvfb :99 -screen 0 1280x800x24 & xvfb=$!
+env -u WAYLAND_DISPLAY DISPLAY=:99 HOME="$sandbox" XDG_DATA_HOME="$sandbox/share" SHELL=/bin/sh \
+  VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./target/debug/ssherlock & app=$!
+sleep 3
+DISPLAY=:99 xdotool type 'echo hello' && DISPLAY=:99 xdotool key Return
+DISPLAY=:99 import -window root target/screenshot.png
+kill "$app" "$xvfb"
+```
+
+On macOS the app runs on the real display. `screencapture -x out.png` is built in; the app that
+runs it (your terminal or editor) needs the Screen Recording permission.
+
 ## License
 
 Licensed under either of
