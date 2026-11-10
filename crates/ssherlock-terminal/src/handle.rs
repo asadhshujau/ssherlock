@@ -15,6 +15,7 @@ use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::error::TerminalError;
+use crate::link::Link;
 use crate::palette::Palette;
 use crate::pty::{PtyInput, PtyIo, PtyOutput};
 use crate::search::SearchDirection;
@@ -65,6 +66,7 @@ enum Command {
     SetSearch(String),
     SearchNext(SearchDirection),
     ClearSearch,
+    LinkAt(GridPoint, oneshot::Sender<Option<Link>>),
 }
 
 impl TerminalHandle {
@@ -233,6 +235,21 @@ impl TerminalHandle {
         self.send(Command::ClearSearch)
     }
 
+    /// The link at a visible cell, if any, found by the terminal's task. Resolves to `None` when
+    /// there is no link or the task has stopped.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write), if the request can't be queued.
+    pub fn link_at(
+        &self,
+        at: GridPoint,
+    ) -> Result<impl Future<Output = Option<Link>> + Send + 'static, TerminalError> {
+        let (reply, answer) = oneshot::channel();
+        self.send(Command::LinkAt(at, reply))?;
+        Ok(async move { answer.await.ok().flatten() })
+    }
+
     /// The most recent snapshot.
     pub fn snapshot(&self) -> Arc<Snapshot> {
         Arc::clone(&self.snapshots.borrow())
@@ -367,6 +384,11 @@ impl Task {
             Command::ClearSearch => {
                 self.terminal.clear_search();
                 self.is_dirty = true;
+            }
+            Command::LinkAt(at, reply) => {
+                if reply.send(self.terminal.link_at(at)).is_err() {
+                    tracing::debug!("link requested and then abandoned");
+                }
             }
             Command::SelectionText(reply) => {
                 if reply.send(self.terminal.selection_text()).is_err() {
