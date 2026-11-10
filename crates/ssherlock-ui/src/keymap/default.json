@@ -18,7 +18,25 @@
     "bindings": {
       "mod-c": "terminal::Copy",
       "mod-v": "terminal::Paste",
-      "shift-insert": "terminal::Paste"
+      "shift-insert": "terminal::Paste",
+      "shift-pageup": "terminal::ScrollPageUp",
+      "shift-pagedown": "terminal::ScrollPageDown",
+      "shift-home": "terminal::ScrollToTop",
+      "shift-end": "terminal::ScrollToBottom",
+      "mod-up": "terminal::ScrollLineUp",
+      "mod-down": "terminal::ScrollLineDown",
+      "mod-k": "terminal::ClearScrollback",
+      "mod-alt-r": "terminal::ResetTerminal",
+      "mod-f": "terminal::Find"
+    }
+  },
+  {
+    "context": "TerminalSearch",
+    "bindings": {
+      "enter": "terminal::SearchOlder",
+      "shift-enter": "terminal::SearchNewer",
+      "escape": "terminal::DismissSearch",
+      "mod-f": "terminal::Find"
     }
   }
 ]
