@@ -1,15 +1,74 @@
-[package]
-name = "ssherlock"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.85"
-description = "Rust SSH Client"
+rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/asadhshujau/ssherlock"
 homepage = "https://github.com/asadhshujau/ssherlock"
-readme = "README.md"
-keywords = ["ssh", "terminal", "sftp", "client", "gpui"]
-categories = ["command-line-utilities", "network-programming"]
-include = ["src/**", "Cargo.toml", "README.md", "LICENSE-*"]
 
-[dependencies]
+# Every external version lives here; crates use `dep = { workspace = true }`.
+# Each phase adds the crates it starts using, with a one-line reason (CLAUDE.md §2, §14).
+[workspace.dependencies]
+# ── internal ──────────────────────────────────────────────────────────────────
+ssherlock-core = { path = "crates/ssherlock-core", version = "0.0.1" }
+ssherlock-store = { path = "crates/ssherlock-store", version = "0.0.1" }
+ssherlock-terminal = { path = "crates/ssherlock-terminal", version = "0.0.1" }
+ssherlock-ssh = { path = "crates/ssherlock-ssh", version = "0.0.1" }
+ssherlock-ui = { path = "crates/ssherlock-ui", version = "0.0.1" }
+
+# ── external ──────────────────────────────────────────────────────────────────
+# UI toolkit; pinned exactly because its API changes between minor versions.
+gpui = "=0.2.2"
+# The one async runtime for network, disk and pty I/O.
+tokio = { version = "1.54", features = ["rt-multi-thread", "sync", "macros", "time"] }
+# CancellationToken for long-lived tasks.
+tokio-util = "0.7.20"
+# Error enums in library crates.
+thiserror = "2.0.21"
+# Top-level errors in the binary and UI crate.
+anyhow = "1.0.104"
+# Structured logging.
+tracing = "0.1.44"
+# Log formatting and filtering.
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# Non-blocking rolling log file.
+tracing-appender = "0.2.5"
+# Platform data, config and cache directories.
+directories = "6.0.0"
+# Id<T> is a UUID v7.
+uuid = { version = "1.29", features = ["v7", "serde"] }
+# Serialisation for models, settings, import and export.
+serde = { version = "1.0.229", features = ["derive"] }
+# JSON is the settings and import/export format.
+serde_json = "1.0.154"
+# SecretString / SecretBox so secrets can't be logged or copied by accident.
+secrecy = { version = "0.10.3", features = ["serde"] }
+# Wipe buffers that held key material.
+zeroize = "1.9.1"
+# Readable diffs in test assertions.
+pretty_assertions = "1.4.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "warn"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "warn"
+# Pedantic lints we turn off because they fight gpui builder chains or add noise.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"

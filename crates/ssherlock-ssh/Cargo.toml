@@ -1,0 +1,15 @@
+[package]
+name = "ssherlock-ssh"
+description = "SSH sessions, authentication, forwarding and SFTP for SSHerlock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+ssherlock-core = { workspace = true }
+
+[lints]
+workspace = true

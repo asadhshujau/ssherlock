@@ -67,6 +67,16 @@ Milestones:
 - **M3 — Sync & Team (Phases 11–12):** everything Termius charges Team for, free.
 - **M4 — Beyond (Phases 13–14):** AI, release engineering, the `(+)` items.
 
+Progress (update in the PR that changes a phase's status):
+
+| Phase | Status |
+|-------|--------|
+| 0 — Foundations | in progress |
+| 1 — Terminal core | not started |
+| 2 — SSH core | not started |
+| 3 — Hosts, groups & storage | not started |
+| 4 – 14 | not started |
+
 ---
 
 ## Phase 0 — Foundations (S)
