@@ -1,5 +1,19 @@
 [
   {
+    "context": "Pane",
+    "bindings": {
+      "mod-t": "pane::NewTab",
+      "mod-w": "pane::CloseTab",
+      "ctrl-tab": "pane::NextTab",
+      "ctrl-shift-tab": "pane::PreviousTab",
+      "ctrl-pagedown": "pane::NextTab",
+      "ctrl-pageup": "pane::PreviousTab",
+      "ctrl-shift-pageup": "pane::MoveTabLeft",
+      "ctrl-shift-pagedown": "pane::MoveTabRight",
+      "mod-r": "pane::RenameTab"
+    }
+  },
+  {
     "context": "Terminal",
     "bindings": {
       "mod-c": "terminal::Copy",

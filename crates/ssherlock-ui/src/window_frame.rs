@@ -9,14 +9,19 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, Bounds, BoxShadow, CursorStyle, Decorations, Div, HitboxBehavior,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, Point,
-    ResizeEdge, Size, StatefulInteractiveElement as _, Styled as _, Tiling, Window, canvas, div,
+    ResizeEdge, SharedString, Size, StatefulInteractiveElement as _, Styled as _, Tiling, Window,
+    canvas, div,
 };
-use ssherlock_core::app;
 
 use crate::theme::Theme;
 
 /// Wraps a window's content in whatever chrome the platform needs.
-pub fn window_frame(window: &mut Window, theme: &Theme, content: impl IntoElement) -> AnyElement {
+pub fn window_frame(
+    window: &mut Window,
+    theme: &Theme,
+    title: SharedString,
+    content: impl IntoElement,
+) -> AnyElement {
     let root = div()
         .size_full()
         .flex()
@@ -27,7 +32,7 @@ pub fn window_frame(window: &mut Window, theme: &Theme, content: impl IntoElemen
     match window.window_decorations() {
         Decorations::Server => root.child(content).into_any_element(),
         Decorations::Client { tiling } => {
-            client_frame(window, theme, tiling, root.child(content)).into_any_element()
+            client_frame(window, theme, title, tiling, root.child(content)).into_any_element()
         }
     }
 }
@@ -36,6 +41,7 @@ pub fn window_frame(window: &mut Window, theme: &Theme, content: impl IntoElemen
 fn client_frame(
     window: &mut Window,
     theme: &Theme,
+    title: SharedString,
     tiling: Tiling,
     content: impl IntoElement,
 ) -> impl IntoElement {
@@ -90,7 +96,7 @@ fn client_frame(
                 })
                 // Inside the window there are no grips, so no need to repaint on every move.
                 .on_mouse_move(|_, _, cx| cx.stop_propagation())
-                .child(title_bar(window, theme))
+                .child(title_bar(window, theme, title))
                 .child(content),
         )
 }
@@ -114,7 +120,7 @@ fn resize_grip_cursor(inset: Pixels, tiling: Tiling) -> impl IntoElement {
 }
 
 /// Title bar: drag to move, double-click to maximise, right-click for the window menu.
-fn title_bar(window: &Window, theme: &Theme) -> impl IntoElement {
+fn title_bar(window: &Window, theme: &Theme, title: SharedString) -> impl IntoElement {
     let controls = window.window_controls();
     let colors = &theme.colors;
     let background = if window.is_window_active() {
@@ -149,7 +155,14 @@ fn title_bar(window: &Window, theme: &Theme) -> impl IntoElement {
                 window.show_window_menu(event.position);
             })
         })
-        .child(app::NAME)
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(title),
+        )
         .child(
             div()
                 .flex()
