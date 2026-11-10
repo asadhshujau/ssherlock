@@ -76,6 +76,12 @@ pub struct Colors {
     pub control_close_text: Hsla,
     /// Drop shadow around a client-decorated window.
     pub window_shadow: Hsla,
+    /// Background of a tab bar and its inactive tabs.
+    pub tab_bar: Hsla,
+    /// Background of the active tab; matches the content below it.
+    pub tab_active: Hsla,
+    /// Background of a hovered inactive tab.
+    pub tab_hover: Hsla,
 }
 
 /// Colours inside a terminal: the 16 ANSI colours programs pick from, plus defaults.
@@ -154,6 +160,14 @@ pub struct Metrics {
     pub border_width: Pixels,
     /// Thickness of the beam and underline terminal cursors.
     pub cursor_thickness: Pixels,
+    /// Height of a tab bar.
+    pub tab_bar_height: Pixels,
+    /// Narrowest a tab gets.
+    pub tab_min_width: Pixels,
+    /// Widest a tab gets; longer titles are cut with an ellipsis.
+    pub tab_max_width: Pixels,
+    /// Thickness of the active-tab and drop-target markers.
+    pub tab_indicator: Pixels,
 }
 
 impl Theme {
@@ -182,6 +196,9 @@ impl Theme {
                 control_close_hover: rgb(0x00c4_2b1c).into(),
                 control_close_text: rgb(0x00ff_ffff).into(),
                 window_shadow: rgba(0x0000_0066).into(),
+                tab_bar: rgb(0x0016_181c).into(),
+                tab_active: rgb(0x001b_1d22).into(),
+                tab_hover: rgb(0x0020_2329).into(),
             },
             terminal: TerminalColors {
                 ansi: [
@@ -231,6 +248,9 @@ impl Theme {
                 control_close_hover: rgb(0x00c4_2b1c).into(),
                 control_close_text: rgb(0x00ff_ffff).into(),
                 window_shadow: rgba(0x0000_0040).into(),
+                tab_bar: rgb(0x00eb_ecef).into(),
+                tab_active: rgb(0x00f7_f7f8).into(),
+                tab_hover: rgb(0x00e2_e4e8).into(),
             },
             terminal: TerminalColors {
                 ansi: [
@@ -309,6 +329,10 @@ impl Default for Metrics {
             window_inset: px(10.),
             border_width: px(1.),
             cursor_thickness: px(2.),
+            tab_bar_height: px(34.),
+            tab_min_width: px(96.),
+            tab_max_width: px(220.),
+            tab_indicator: px(2.),
         }
     }
 }
@@ -400,6 +424,9 @@ mod tests {
                 ("text on background", c.text, c.background, 4.5),
                 ("text on surface", c.text, c.surface, 4.5),
                 ("text on title bar", c.text, c.title_bar, 4.5),
+                ("active tab text", c.text, c.tab_active, 4.5),
+                ("inactive tab text", c.text_muted, c.tab_bar, 4.5),
+                ("hovered tab text", c.text_muted, c.tab_hover, 4.5),
                 ("muted text on background", c.text_muted, c.background, 4.5),
                 ("muted text on title bar", c.text_muted, c.title_bar, 4.5),
                 (
