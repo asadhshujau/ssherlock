@@ -24,6 +24,7 @@ pub struct Tab {
     root: Stateful<Div>,
     label: AnyElement,
     is_active: bool,
+    has_indicator: bool,
     on_close: Option<CloseHandler>,
 }
 
@@ -34,6 +35,7 @@ impl Tab {
             root: div().id(id),
             label: label.into_any_element(),
             is_active: false,
+            has_indicator: false,
             on_close: None,
         }
     }
@@ -42,6 +44,13 @@ impl Tab {
     #[must_use]
     pub fn active(mut self, is_active: bool) -> Self {
         self.is_active = is_active;
+        self
+    }
+
+    /// Shows a dot before the label, e.g. "something happened in this tab".
+    #[must_use]
+    pub fn indicator(mut self, has_indicator: bool) -> Self {
+        self.has_indicator = has_indicator;
         self
     }
 
@@ -100,6 +109,15 @@ impl RenderOnce for Tab {
                 d.bg(colors.tab_bar)
                     .text_color(colors.text_muted)
                     .hover(move |style| style.bg(hover))
+            })
+            .when(self.has_indicator, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .size(metrics.tab_indicator * 3.)
+                        .rounded_full()
+                        .bg(colors.accent),
+                )
             })
             .child(
                 div()

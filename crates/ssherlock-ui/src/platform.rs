@@ -73,6 +73,11 @@ const MOD: &str = "cmd-";
 #[cfg(not(target_os = "macos"))]
 const MOD: &str = "ctrl-shift-";
 
+// Keymap entries can also use gpui's own `secondary-` prefix, which means Cmd on macOS and Ctrl
+// elsewhere. It suits keys typed with Shift on some layouts, such as `+`: gpui reports those as the
+// symbol without Shift, so a `mod-` (Ctrl+Shift) binding for them would never match. Zoom uses it,
+// as GNOME Terminal and browsers do.
+
 /// Rewrites a keymap keystroke sequence for this platform, expanding the `mod-` prefix of each
 /// keystroke into [`MOD`].
 pub fn expand_keystrokes(spec: &str) -> String {
