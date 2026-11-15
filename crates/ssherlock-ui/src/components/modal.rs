@@ -27,7 +27,8 @@ type DetailBuilder = Box<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 pub enum ModalEvent {
     /// The confirm button or Enter.
     Confirmed,
-    /// The cancel button, Escape, or a click outside the dialog.
+    /// The cancel button or Escape. A click outside the dialog does nothing: cancelling can
+    /// mean rejecting a host key or abandoning a login, which a stray click shouldn't do.
     Cancelled,
 }
 
@@ -106,9 +107,9 @@ impl Render for Modal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let detail = self.detail.as_ref().map(|detail| detail(window, cx));
-        // The focused root carries the key context. Clicking outside the panel cancels, through
-        // a separate backdrop: gpui turns Enter on a *focused* element with `on_click` into a
-        // click, so a focused backdrop would cancel the dialog on the very Enter that opened it.
+        // The focused root carries the key context. The backdrop only dims and swallows clicks,
+        // so nothing behind the dialog reacts while it's open, and a click outside it is
+        // ignored rather than cancelling.
         div()
             .key_context("Modal")
             .track_focus(&self.focus_handle)
@@ -125,13 +126,13 @@ impl Render for Modal {
                     .absolute()
                     .inset_0()
                     .bg(theme.colors.modal_scrim)
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ModalEvent::Cancelled))),
+                    .occlude(),
             )
             .child(
                 div()
                     .id("modal")
-                    // Without this the backdrop underneath still counts as hovered, so any click
-                    // on the panel (a label, the padding, a text field) cancelled the dialog.
+                    // Without this the backdrop underneath still counts as hovered, so a click
+                    // on the panel (a label, the padding, a text field) reached it too.
                     .occlude()
                     .flex()
                     .flex_col()
@@ -291,10 +292,12 @@ mod tests {
         assert_eq!(events_after_click(centre, cx), Vec::<ModalEvent>::new());
     }
 
+    /// Regression: a click on the backdrop cancelled, so a stray click outside the login
+    /// dialog abandoned the login, and outside the host key dialog rejected the key.
     #[gpui::test]
-    fn a_click_outside_the_panel_cancels(cx: &mut TestAppContext) {
+    fn a_click_outside_the_panel_does_nothing(cx: &mut TestAppContext) {
         let corner = |_| gpui::point(gpui::px(2.), gpui::px(2.));
-        assert_eq!(events_after_click(corner, cx), [ModalEvent::Cancelled]);
+        assert_eq!(events_after_click(corner, cx), Vec::<ModalEvent>::new());
     }
 
     #[gpui::test]
