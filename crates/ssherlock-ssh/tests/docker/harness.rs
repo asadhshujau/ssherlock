@@ -5,12 +5,22 @@
 //! skipped with a message, unless `SSHERLOCK_REQUIRE_DOCKER` is set (CI sets it on Linux), in
 //! which case it fails.
 
+// Each test crate includes this file and uses a different subset of it.
+#![allow(dead_code)]
+
 use std::io::Read;
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+/// The test user on the server.
+pub const USER: &str = "tester";
+/// The test user's password.
+pub const PASSWORD: &str = "tester-password";
+/// Passphrase of `fixtures/id_ed25519_encrypted`.
+pub const KEY_PASSPHRASE: &str = "fixture-passphrase";
 
 /// Image built from `compose.yml`.
 const IMAGE: &str = "ssherlock-test-sshd";
@@ -118,6 +128,13 @@ impl Drop for TestServer {
             .args(["rm", "--force", &self.id])
             .output();
     }
+}
+
+/// The path of a file in `tests/fixtures/`.
+pub fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 /// Checks Docker once per test binary and builds the image. `Err` says why tests can't run.

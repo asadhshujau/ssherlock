@@ -4,6 +4,10 @@
 #![forbid(unsafe_code)]
 
 mod error;
+pub mod host_keys;
 pub mod known_hosts;
+pub mod session;
 
 pub use error::SshError;
+pub use host_keys::HostKeys;
+pub use session::{ConnectConfig, Session, SessionEvent};

@@ -1,6 +1,7 @@
 //! The crate's error type.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Everything that can go wrong in `ssherlock-ssh`.
 #[derive(Debug, thiserror::Error)]
@@ -38,4 +39,49 @@ pub enum SshError {
     /// The operating system's random number generator failed.
     #[error("could not get random bytes from the operating system")]
     Random(#[from] rand::rngs::SysError),
+
+    /// TCP to the server failed.
+    #[error("could not connect to {host}:{port}")]
+    Connect {
+        /// The host as given.
+        host: String,
+        /// The port.
+        port: u16,
+        /// Why.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The server didn't accept TCP and send its host key in time.
+    #[error("timed out connecting to {host}:{port} after {} s", after.as_secs())]
+    ConnectTimeout {
+        /// The host as given.
+        host: String,
+        /// The port.
+        port: u16,
+        /// The timeout that ran out.
+        after: Duration,
+    },
+
+    /// The user declined the server's host key (or wasn't there to be asked).
+    #[error("the host key for {host} was not trusted")]
+    HostKeyRejected {
+        /// The host as named in `known_hosts`.
+        host: String,
+    },
+
+    /// The server's host key is marked `@revoked`.
+    #[error("the host key for {host} is revoked at {path} line {line}")]
+    HostKeyRevoked {
+        /// The host as named in `known_hosts`.
+        host: String,
+        /// The file that revokes it.
+        path: PathBuf,
+        /// The line that revokes it.
+        line: usize,
+    },
+
+    /// The SSH protocol layer failed.
+    #[error("SSH protocol error")]
+    Protocol(#[from] russh::Error),
 }
