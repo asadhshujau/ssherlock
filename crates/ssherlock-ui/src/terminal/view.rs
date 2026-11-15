@@ -118,6 +118,8 @@ pub struct TerminalView {
     bell_flash: Option<Task<()>>,
     /// The terminal has keyboard focus.
     is_focused: bool,
+    /// Show "Process exited" when the program ends. A remote terminal says it in its status bar.
+    shows_exit_banner: bool,
     /// While the cursor blinks: its phase and the timer that flips it.
     blink: Option<Blink>,
     context_menu: Option<(Entity<ContextMenu>, Subscription)>,
@@ -138,6 +140,30 @@ impl TerminalView {
     /// A view running a shell on this machine: the [`DefaultShell`] if one is set, else the
     /// user's login shell.
     pub fn local(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut view = Self::blank(window, cx);
+        let shell = cx
+            .try_global::<DefaultShell>()
+            .map(|shell| shell.0.clone())
+            .unwrap_or_default();
+        view.start(shell, cx);
+        view
+    }
+
+    /// A view showing a program that's already connected to `pty` (a remote shell), started
+    /// at `size`.
+    pub fn with_pty(
+        pty: ssherlock_terminal::PtyIo,
+        size: TerminalSize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self::blank(window, cx);
+        view.attach(pty, size, cx);
+        view
+    }
+
+    /// A view with nothing running yet.
+    fn blank(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let subscriptions = vec![
             cx.on_focus(&focus_handle, window, |view, _, cx| {
@@ -149,7 +175,7 @@ impl TerminalView {
             cx.observe_global::<Theme>(Self::theme_changed),
             cx.observe_global::<TerminalZoom>(|_, cx| cx.notify()),
         ];
-        let mut view = Self {
+        Self {
             state: State::Starting,
             focus_handle,
             title: None,
@@ -167,17 +193,18 @@ impl TerminalView {
             pending_paste: None,
             bell_flash: None,
             is_focused: false,
+            shows_exit_banner: true,
             blink: None,
             context_menu: None,
             _subscriptions: subscriptions,
             tasks: Vec::new(),
-        };
-        let shell = cx
-            .try_global::<DefaultShell>()
-            .map(|shell| shell.0.clone())
-            .unwrap_or_default();
-        view.start(shell, cx);
-        view
+        }
+    }
+
+    /// Whether to show the "Process exited" banner when the program ends (on by default).
+    pub fn set_shows_exit_banner(&mut self, shows: bool, cx: &mut Context<Self>) {
+        self.shows_exit_banner = shows;
+        cx.notify();
     }
 
     /// The title the program set, if any.
@@ -885,7 +912,8 @@ fn terminal_button(button: MouseButton) -> Option<ssherlock_terminal::MouseButto
 
 /// The monospace family terminals use: the first of the theme's candidates that is installed,
 /// looked up once per run.
-fn mono_family(theme: &Theme, window: &Window, cx: &mut App) -> SharedString {
+/// The terminal font family: the first of the theme's monospace families that is installed.
+pub(crate) fn mono_family(theme: &Theme, window: &Window, cx: &mut App) -> SharedString {
     if let Some(MonoFamily(family)) = cx.try_global::<MonoFamily>() {
         return family.clone();
     }
@@ -1017,9 +1045,10 @@ impl Render for TerminalView {
             .when_some(self.hovered_link.as_ref(), |root, link| {
                 root.child(link_hint(link, &theme))
             })
-            .when_some(self.exit.as_ref(), |root, exit| {
-                root.child(exit_banner(exit, &theme))
-            })
+            .when_some(
+                self.exit.as_ref().filter(|_| self.shows_exit_banner),
+                |root, exit| root.child(exit_banner(exit, &theme)),
+            )
             .when_some(self.pending_paste.as_ref(), |root, pending| {
                 root.child(pending.modal.clone())
             })

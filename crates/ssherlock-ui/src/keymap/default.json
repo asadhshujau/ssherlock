@@ -10,7 +10,8 @@
       "ctrl-pageup": "pane::PreviousTab",
       "ctrl-shift-pageup": "pane::MoveTabLeft",
       "ctrl-shift-pagedown": "pane::MoveTabRight",
-      "mod-r": "pane::RenameTab"
+      "mod-r": "pane::RenameTab",
+      "mod-o": "ssh::QuickConnect"
     }
   },
   {

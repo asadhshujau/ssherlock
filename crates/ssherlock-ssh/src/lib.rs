@@ -15,4 +15,6 @@ pub use auth::{AgentSocket, AuthMethod};
 pub use connection::{ConnectionState, RemoteShellConfig, spawn_shell};
 pub use error::SshError;
 pub use host_keys::HostKeys;
+/// The SSH public key type used throughout this crate's API.
+pub use russh::keys::PublicKey;
 pub use session::{ConnectConfig, Session, SessionEvent};

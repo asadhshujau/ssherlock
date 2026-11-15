@@ -5,12 +5,17 @@
 //! the gpui entity around it. It takes typed characters from key events. It doesn't yet support
 //! IME composition, mouse placement of the caret or a selection other than "everything", which
 //! is all a rename field needs.
+//!
+//! A [`TextInput::secret`] field (passwords, passphrases) shows a bullet per character, never puts
+//! its text in an event, hands it over once as a [`SecretString`], and zeroes its buffer on drop.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
 };
+use ssherlock_core::SecretString;
+use zeroize::Zeroize as _;
 
 use crate::theme::ActiveTheme as _;
 
@@ -61,6 +66,20 @@ impl EditBuffer {
     /// The text before and after the caret.
     pub fn split_at_cursor(&self) -> (&str, &str) {
         self.text.split_at(self.cursor)
+    }
+
+    /// Wipes the text from memory and empties the buffer.
+    pub fn zeroize(&mut self) {
+        self.text.zeroize();
+        self.cursor = 0;
+        self.is_all_selected = false;
+    }
+
+    /// Takes the text out, leaving the buffer empty.
+    pub fn take(&mut self) -> String {
+        self.cursor = 0;
+        self.is_all_selected = false;
+        std::mem::take(&mut self.text)
     }
 
     /// Whether all the text is selected.
@@ -137,10 +156,10 @@ impl EditBuffer {
 /// What a [`TextInput`] reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextInputEvent {
-    /// The text changed; carries the new text.
+    /// The text changed; carries the new text (empty for a secret field).
     Changed(String),
     /// Enter was pressed (or, for a [`InputKind::SingleEdit`] field, focus moved away): keep
-    /// this text.
+    /// this text (empty for a secret field; take it with [`TextInput::take_secret`]).
     Confirmed(String),
     /// Escape was pressed: discard the edit.
     Cancelled,
@@ -161,6 +180,7 @@ pub enum InputKind {
 pub struct TextInput {
     buffer: EditBuffer,
     kind: InputKind,
+    is_secret: bool,
     focus_handle: FocusHandle,
     /// Set once a [`InputKind::SingleEdit`] field has reported, so a later blur sends nothing.
     is_finished: bool,
@@ -194,15 +214,43 @@ impl TextInput {
         Self {
             buffer: EditBuffer::new(text),
             kind,
+            is_secret: false,
             focus_handle,
             is_finished: false,
             _subscriptions: subscriptions,
         }
     }
 
-    /// The current text.
+    /// Makes this a field for a secret: masked on screen and kept out of events.
+    #[must_use]
+    pub fn secret(mut self) -> Self {
+        self.is_secret = true;
+        self
+    }
+
+    /// The current text (empty for a secret field).
     pub fn text(&self) -> &str {
-        self.buffer.text()
+        if self.is_secret {
+            ""
+        } else {
+            self.buffer.text()
+        }
+    }
+
+    /// Hands over a secret field's text and empties the field.
+    pub fn take_secret(&mut self, cx: &mut Context<Self>) -> SecretString {
+        let secret = SecretString::from(self.buffer.take());
+        cx.notify();
+        secret
+    }
+
+    /// The text an event may carry: the text itself, or nothing for a secret field.
+    fn event_text(&self) -> String {
+        if self.is_secret {
+            String::new()
+        } else {
+            self.buffer.text().to_owned()
+        }
     }
 
     /// Selects all the text, so typing replaces it.
@@ -212,7 +260,7 @@ impl TextInput {
     }
 
     fn confirm(&mut self, cx: &mut Context<Self>) {
-        self.finish(TextInputEvent::Confirmed(self.buffer.text().to_owned()), cx);
+        self.finish(TextInputEvent::Confirmed(self.event_text()), cx);
     }
 
     fn finish(&mut self, event: TextInputEvent, cx: &mut Context<Self>) {
@@ -256,13 +304,26 @@ impl TextInput {
                 Edit::Insert(text)
             }
         };
-        let previous = self.buffer.text().to_owned();
+        let previous_len = self.buffer.text().len();
+        let previous = (!self.is_secret).then(|| self.buffer.text().to_owned());
         self.buffer.apply(edit);
-        if previous != self.buffer.text() {
-            cx.emit(TextInputEvent::Changed(self.buffer.text().to_owned()));
+        let changed = match &previous {
+            Some(previous) => previous != self.buffer.text(),
+            None => previous_len != self.buffer.text().len() || matches!(edit, Edit::Insert(_)),
+        };
+        if changed {
+            cx.emit(TextInputEvent::Changed(self.event_text()));
         }
         cx.stop_propagation();
         cx.notify();
+    }
+}
+
+impl Drop for TextInput {
+    fn drop(&mut self) {
+        if self.is_secret {
+            self.buffer.zeroize();
+        }
     }
 }
 
@@ -271,7 +332,15 @@ impl Render for TextInput {
         let theme = cx.theme();
         let (before, after) = self.buffer.split_at_cursor();
         let is_focused = self.focus_handle.is_focused(window);
-        let text = |s: &str| SharedString::from(s.to_owned());
+        let is_secret = self.is_secret;
+        // A secret shows one bullet per character, so its length is all that's visible.
+        let text = |s: &str| {
+            if is_secret {
+                SharedString::from("\u{2022}".repeat(s.chars().count()))
+            } else {
+                SharedString::from(s.to_owned())
+            }
+        };
 
         div()
             .key_context("TextInput")
@@ -402,5 +471,43 @@ mod tests {
             assert_eq!(&state(&buffer), expected, "{name}");
         }
         assert!(!EditBuffer::new("").is_all_selected());
+    }
+
+    /// A secret field's text never leaves it except through `take_secret`.
+    #[gpui::test]
+    fn secret_text_stays_out_of_events(cx: &mut gpui::TestAppContext) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use ssherlock_core::ExposeSecret as _;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new("", InputKind::Persistent, window, cx).secret()
+        });
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        let _subscription = cx.update(|_, cx| {
+            cx.subscribe(&input, move |_, event: &TextInputEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_input("hunter2");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        let events = seen.take();
+        for event in &events {
+            assert!(
+                !format!("{event:?}").contains("hunter"),
+                "leaked: {event:?}"
+            );
+        }
+        assert!(matches!(events.last(), Some(TextInputEvent::Confirmed(text)) if text.is_empty()));
+        assert_eq!(input.read_with(cx, |input, _| input.text().to_owned()), "");
+        let secret = input.update(cx, TextInput::take_secret);
+        assert_eq!(secret.expose_secret(), "hunter2");
+        let again = input.update(cx, TextInput::take_secret);
+        assert_eq!(again.expose_secret(), "", "taking empties the field");
     }
 }

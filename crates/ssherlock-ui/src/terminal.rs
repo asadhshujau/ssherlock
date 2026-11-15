@@ -11,6 +11,7 @@ pub mod view;
 
 use gpui::{App, Global};
 use ssherlock_terminal::ShellConfig;
+pub(crate) use view::mono_family;
 pub use view::{TerminalView, TerminalViewEvent};
 
 use crate::theme::ActiveTheme as _;

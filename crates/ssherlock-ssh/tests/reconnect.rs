@@ -127,7 +127,12 @@ async fn survives_a_frozen_network_and_reports_latency() {
     let first = wait_for(&mut states, Duration::from_secs(15), is_connected).await;
     assert_eq!(
         first.get(..2),
-        Some(&[ConnectionState::Connecting, ConnectionState::Authenticating][..]),
+        Some(
+            &[
+                ConnectionState::Connecting { attempt: 0 },
+                ConnectionState::Authenticating
+            ][..]
+        ),
         "{first:?}"
     );
     wait_for(&mut states, Duration::from_secs(5), |s| {
@@ -147,6 +152,12 @@ async fn survives_a_frozen_network_and_reports_latency() {
 
     let back = wait_for(&mut states, Duration::from_secs(30), is_connected).await;
     assert!(back.contains(&ConnectionState::Authenticating), "{back:?}");
+    assert!(
+        back.iter()
+            .any(|s| matches!(s, ConnectionState::Connecting { attempt } if *attempt > 0)),
+        "reconnect attempts are numbered: {back:?}"
+    );
+    read_until(&mut io, "-- reconnected --").await;
     run(&io, "echo after-$((40+2))").await;
     read_until(&mut io, "after-42").await;
 

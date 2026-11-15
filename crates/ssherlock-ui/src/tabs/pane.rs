@@ -2,25 +2,68 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, Context, Entity, EntityId, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div,
+    AnyElement, AppContext as _, Context, Entity, EntityId, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
 };
+use ssherlock_core::ConnectTarget;
 
 use super::actions::{
     CloseTab, MoveTabLeft, MoveTabRight, NewTab, NextTab, PreviousTab, RenameTab,
 };
 use super::list::{Step, TabList};
 use crate::components::{InputKind, Tab, TabBar, TextInput, TextInputEvent};
+use crate::ssh::actions::QuickConnect;
+use crate::ssh::{QuickConnectBar, QuickConnectEvent, RemoteTerminal};
 use crate::terminal::{TerminalView, TerminalViewEvent};
 use crate::theme::ActiveTheme as _;
 
 /// Shown for a tab whose program hasn't set a title.
 const DEFAULT_TITLE: &str = "Terminal";
 
+/// What a tab shows: a shell on this machine or on a server.
+enum TabView {
+    Local(Entity<TerminalView>),
+    Remote(Entity<RemoteTerminal>),
+}
+
+impl TabView {
+    fn entity_id(&self) -> EntityId {
+        match self {
+            Self::Local(view) => view.entity_id(),
+            Self::Remote(view) => view.entity_id(),
+        }
+    }
+
+    fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
+        match self {
+            Self::Local(view) => view.focus_handle(cx),
+            Self::Remote(view) => view.focus_handle(cx),
+        }
+    }
+
+    /// The program's title, else (for a remote tab) `user@host`.
+    fn title(&self, cx: &gpui::App) -> Option<SharedString> {
+        match self {
+            Self::Local(view) => view.read(cx).title().cloned(),
+            Self::Remote(view) => {
+                let view = view.read(cx);
+                view.title(cx).or_else(|| Some(view.label().clone()))
+            }
+        }
+    }
+
+    fn element(&self) -> AnyElement {
+        match self {
+            Self::Local(view) => view.clone().into_any_element(),
+            Self::Remote(view) => view.clone().into_any_element(),
+        }
+    }
+}
+
 /// One tab: a terminal and the name the user gave it, if any.
 struct PaneTab {
-    view: Entity<TerminalView>,
+    view: TabView,
     /// Chosen by the user; wins over the program's title.
     name: Option<SharedString>,
     /// The bell rang while the tab was in the background.
@@ -62,11 +105,15 @@ impl Render for DraggedTab {
 pub struct Pane {
     tabs: TabList<PaneTab>,
     rename: Option<Rename>,
+    quick_connect: Option<(Entity<QuickConnectBar>, Subscription)>,
     focus_handle: FocusHandle,
 }
 
 impl Focusable for Pane {
     fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
+        if let Some((bar, _)) = &self.quick_connect {
+            return bar.focus_handle(cx);
+        }
         self.tabs.active().map_or_else(
             || self.focus_handle.clone(),
             |tab| tab.view.focus_handle(cx),
@@ -80,6 +127,7 @@ impl Pane {
         let mut pane = Self {
             tabs: TabList::default(),
             rename: None,
+            quick_connect: None,
             focus_handle: cx.focus_handle(),
         };
         pane.open_tab(window, cx);
@@ -106,7 +154,33 @@ impl Pane {
 
     fn open_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.new(|cx| TerminalView::local(window, cx));
-        let subscription = cx.subscribe_in(&view, window, Self::terminal_event);
+        let subscription = cx.subscribe_in(&view, window, |pane, view, event, window, cx| {
+            pane.terminal_event(view.entity_id(), event, window, cx);
+        });
+        self.add_tab(TabView::Local(view), subscription, window, cx);
+    }
+
+    /// Opens a tab connected to `target` over SSH, after the active one.
+    pub fn open_remote_tab(
+        &mut self,
+        target: &ConnectTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| RemoteTerminal::new(target, window, cx));
+        let subscription = cx.subscribe_in(&view, window, |pane, view, event, window, cx| {
+            pane.terminal_event(view.entity_id(), event, window, cx);
+        });
+        self.add_tab(TabView::Remote(view), subscription, window, cx);
+    }
+
+    fn add_tab(
+        &mut self,
+        view: TabView,
+        subscription: Subscription,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.tabs.open(PaneTab {
             view,
             name: None,
@@ -116,15 +190,33 @@ impl Pane {
         self.focus_active(window, cx);
     }
 
+    fn quick_connect(&mut self, _: &QuickConnect, window: &mut Window, cx: &mut Context<Self>) {
+        let bar = cx.new(|cx| QuickConnectBar::new(window, cx));
+        let subscription = cx.subscribe_in(&bar, window, |pane, _, event, window, cx| {
+            pane.quick_connect = None;
+            match event {
+                QuickConnectEvent::Connect(target) => pane.open_remote_tab(target, window, cx),
+                QuickConnectEvent::Dismissed => pane.focus_active(window, cx),
+            }
+        });
+        bar.focus_handle(cx).focus(window);
+        self.quick_connect = Some((bar, subscription));
+        cx.notify();
+    }
+
+    /// Whether the quick connect bar is open.
+    pub fn is_quick_connect_open(&self) -> bool {
+        self.quick_connect.is_some()
+    }
+
     fn terminal_event(
         &mut self,
-        view: &Entity<TerminalView>,
+        id: EntityId,
         event: &TerminalViewEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if *event == TerminalViewEvent::Bell {
-            let id = view.entity_id();
             let active = self.tabs.active().map(|tab| tab.view.entity_id());
             if active != Some(id)
                 && let Some(index) = self.tabs.position(|tab| tab.view.entity_id() == id)
@@ -142,7 +234,6 @@ impl Pane {
             cx.notify();
             return;
         }
-        let id = view.entity_id();
         if let Some(index) = self.tabs.position(|tab| tab.view.entity_id() == id) {
             self.close_tab_at(index, window, cx);
         }
@@ -338,14 +429,14 @@ fn is_clean_exit(event: &TerminalViewEvent) -> bool {
 fn label(tab: &PaneTab, cx: &gpui::App) -> SharedString {
     tab.name
         .clone()
-        .or_else(|| tab.view.read(cx).title().cloned())
+        .or_else(|| tab.view.title(cx))
         .unwrap_or_else(|| SharedString::new_static(DEFAULT_TITLE))
 }
 
 impl Render for Pane {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let active = self.tabs.active().map(|tab| tab.view.clone());
+        let active = self.tabs.active().map(|tab| tab.view.element());
         div()
             .key_context("Pane")
             .track_focus(&self.focus_handle)
@@ -356,6 +447,8 @@ impl Render for Pane {
             .on_action(cx.listener(Self::move_tab_left))
             .on_action(cx.listener(Self::move_tab_right))
             .on_action(cx.listener(Self::rename_tab))
+            .on_action(cx.listener(Self::quick_connect))
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -383,8 +476,26 @@ impl Render for Pane {
                                 }))
                                 .child("New tab"),
                         )
+                        .child(
+                            div()
+                                .id("empty-quick-connect")
+                                .ml(theme.spacing.md)
+                                .px(theme.spacing.lg)
+                                .py(theme.spacing.sm)
+                                .rounded(theme.radius.sm)
+                                .border(theme.metrics.border_width)
+                                .border_color(theme.colors.border)
+                                .hover(|style| style.text_color(theme.colors.text))
+                                .on_click(cx.listener(|pane, _, window, cx| {
+                                    pane.quick_connect(&QuickConnect, window, cx);
+                                }))
+                                .child("Quick connect"),
+                        )
                 },
             ))
+            .when_some(self.quick_connect.as_ref(), |d, (bar, _)| {
+                d.child(bar.clone())
+            })
     }
 }
 
@@ -443,6 +554,59 @@ mod tests {
         // Actions still reach an empty pane.
         cx.dispatch_action(NewTab);
         assert_eq!(state(cx), (1, Some(0)));
+    }
+
+    #[gpui::test]
+    fn quick_connect_opens_and_dismisses(cx: &mut TestAppContext) {
+        let (pane, cx) = pane(cx);
+        cx.dispatch_action(QuickConnect);
+        assert!(pane.read_with(cx, |pane, _| pane.is_quick_connect_open()));
+        cx.simulate_keystrokes("escape");
+        assert!(!pane.read_with(cx, |pane, _| pane.is_quick_connect_open()));
+        assert_eq!(pane.read_with(cx, |pane, _| pane.tab_count()), 1);
+    }
+
+    #[gpui::test]
+    fn quick_connect_opens_a_remote_tab(cx: &mut TestAppContext) {
+        // A real runtime: the connection attempt runs on it. Port 9 on localhost has nothing
+        // listening, so the attempt fails at once and never leaves this machine.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("ssherlock-ui-qc-{}", std::process::id()));
+        cx.update(|cx| {
+            cx.set_global(crate::runtime::TokioHandle::new(runtime.handle().clone()));
+            cx.set_global(crate::ssh::SshEnvironment {
+                known_hosts: dir.join("known_hosts"),
+                read_only_known_hosts: Vec::new(),
+                ssh_dir: None,
+                local_user: Some("tester".into()),
+            });
+        });
+        let (pane, cx) = pane(cx);
+        cx.dispatch_action(QuickConnect);
+        cx.simulate_input("127.0.0.1:not-a-port");
+        cx.simulate_keystrokes("enter");
+        assert!(
+            pane.read_with(cx, |pane, _| pane.is_quick_connect_open()),
+            "invalid text keeps the bar open"
+        );
+        cx.simulate_keystrokes("escape");
+
+        cx.dispatch_action(QuickConnect);
+        cx.simulate_input("127.0.0.1:9");
+        cx.simulate_keystrokes("enter");
+        let (count, active, title) = pane.read_with(cx, |pane, cx| {
+            (pane.tab_count(), pane.active_index(), pane.title(cx))
+        });
+        assert_eq!((count, active), (2, Some(1)));
+        assert_eq!(
+            title, "tester@127.0.0.1:9",
+            "the user comes from the environment"
+        );
+        drop(runtime);
     }
 
     #[gpui::test]

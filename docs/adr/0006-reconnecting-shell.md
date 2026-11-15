@@ -19,12 +19,12 @@ and its session just ends when they fail. A terminal tab should survive a drop i
   connection.
 - The first connection is never retried. A typo'd host should show its error at once.
 - Typing while disconnected is dropped, never replayed into the next shell.
-- States (`Connecting`, `Authenticating`, `Connected { latency }`, `Reconnecting`,
+- States (`Connecting { attempt }`, `Authenticating`, `Connected { latency }`, `Reconnecting`,
   `Disconnected(reason)`) go to the UI as `SessionEvent::State`.
 
 ## Consequences
 - The remote shell is new after a reconnect (no tmux-style resume); its output starts below the
-  old output in the same tab.
+  old output in the same tab, after a faint `-- reconnected --` line.
 - A login that needs a password asks again on every reconnect. Saved credentials (Phase 4)
   remove that.
 - Dropping the `PtyIo` is the one way to stop the task, so closing a tab can't leave an orphan

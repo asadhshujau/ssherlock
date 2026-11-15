@@ -15,6 +15,8 @@ pub enum ButtonStyle {
     Primary,
     /// Everything else; only an outline.
     Subtle,
+    /// A risky choice the user must mean, like trusting a changed host key.
+    Danger,
 }
 
 /// A button with a text label. Attach behaviour with `on_click`.
@@ -70,6 +72,10 @@ impl RenderOnce for Button {
                     .bg(colors.accent)
                     .border_color(colors.accent)
                     .text_color(colors.accent_text),
+                ButtonStyle::Danger => d
+                    .bg(colors.danger)
+                    .border_color(colors.danger)
+                    .text_color(colors.danger_text),
                 ButtonStyle::Subtle => d
                     .border_color(colors.border)
                     .text_color(colors.text)
