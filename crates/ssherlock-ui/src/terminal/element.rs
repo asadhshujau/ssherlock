@@ -141,6 +141,14 @@ pub struct PaintStyle {
     pub cursor_thickness: Pixels,
     /// Drawn behind selected text.
     pub selection: Hsla,
+    /// Drawn behind search matches.
+    pub search_match: Hsla,
+    /// Drawn behind the focused search match.
+    pub search_match_focused: Hsla,
+    /// The scroll indicator's thumb.
+    pub scrollbar: Hsla,
+    /// The scroll indicator's width.
+    pub scrollbar_width: Pixels,
 }
 
 /// Paints `snapshot` into `bounds`.
@@ -164,22 +172,39 @@ pub fn paint(
                 from_rgb(run.color),
             ));
         }
-        if let Some(columns) = snapshot
-            .selection
-            .and_then(|selection| selection.columns_on(row, snapshot.columns()))
-        {
-            let start = metrics.cell_origin(origin, row, *columns.start());
-            let width = metrics.cell_width * count(columns.count());
-            window.paint_quad(fill(
-                Bounds::new(start, size(width, metrics.line_height)),
-                style.selection,
-            ));
+        let highlights = snapshot
+            .search_matches
+            .iter()
+            .map(|range| (range, style.search_match))
+            .chain(
+                snapshot
+                    .focused_match
+                    .iter()
+                    .map(|range| (range, style.search_match_focused)),
+            )
+            .chain(
+                snapshot
+                    .selection
+                    .iter()
+                    .map(|range| (range, style.selection)),
+            );
+        for (range, color) in highlights {
+            if let Some(columns) = range.columns_on(row, snapshot.columns()) {
+                let start = metrics.cell_origin(origin, row, *columns.start());
+                let width = metrics.cell_width * count(columns.count());
+                window.paint_quad(fill(
+                    Bounds::new(start, size(width, metrics.line_height)),
+                    color,
+                ));
+            }
         }
         for batch in text_batches(line) {
             let start = metrics.cell_origin(origin, row, batch.column);
             paint_text(&batch, start, metrics, window, cx);
         }
     }
+
+    paint_scrollbar(bounds, snapshot, style, window);
 
     if let Some(cursor) = snapshot.cursor {
         let cell = snapshot.cell(cursor.row, cursor.column);
@@ -235,6 +260,47 @@ pub fn paint(
             }
         }
     }
+}
+
+/// Where the scroll indicator's thumb goes, as fractions of the track: `(top, height)`.
+///
+/// Shown only while the view is scrolled back, so it says "you're not at the bottom" without
+/// cluttering the live screen.
+fn scroll_thumb(rows: usize, history: usize, display_offset: usize) -> Option<(f32, f32)> {
+    if display_offset == 0 || history == 0 {
+        return None;
+    }
+    let total = count(rows + history);
+    let top = count(history.saturating_sub(display_offset)) / total;
+    let height = count(rows) / total;
+    Some((top, height))
+}
+
+fn paint_scrollbar(
+    bounds: Bounds<Pixels>,
+    snapshot: &Snapshot,
+    style: &PaintStyle,
+    window: &mut Window,
+) {
+    let Some((top, height)) = scroll_thumb(
+        snapshot.rows(),
+        snapshot.history_size,
+        snapshot.display_offset,
+    ) else {
+        return;
+    };
+    let track = bounds.size.height;
+    // Keep the thumb at least a line tall so it stays visible in a long scrollback.
+    let thumb = (track * height).max(style.metrics.line_height);
+    let y = bounds.origin.y + (track - thumb) * (top / (1. - height).max(f32::EPSILON)).min(1.);
+    let x = bounds.origin.x + bounds.size.width - style.scrollbar_width;
+    window.paint_quad(
+        fill(
+            Bounds::new(point(x, y), size(style.scrollbar_width, thumb)),
+            style.scrollbar,
+        )
+        .corner_radii(style.scrollbar_width / 2.),
+    );
 }
 
 fn paint_text(
@@ -471,6 +537,20 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn scroll_thumb_shows_only_when_scrolled_back() {
+        let cases = [
+            ("at the bottom", (10, 30, 0), None),
+            ("no history", (10, 0, 0), None),
+            ("at the top", (10, 30, 30), Some((0.0, 0.25))),
+            ("halfway", (10, 30, 15), Some((0.375, 0.25))),
+            ("one line up", (10, 30, 1), Some((0.725, 0.25))),
+        ];
+        for (name, (rows, history, offset), expected) in cases {
+            assert_eq!(scroll_thumb(rows, history, offset), expected, "{name}");
+        }
     }
 
     #[test]

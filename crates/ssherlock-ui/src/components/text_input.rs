@@ -1,4 +1,5 @@
-//! A single-line text field, for short inline edits such as renaming a tab.
+//! A single-line text field, for short inline edits (renaming a tab) and filters that react
+//! as you type (search).
 //!
 //! The editing rules live in [`EditBuffer`], plain data tested without gpui. [`TextInput`] is
 //! the gpui entity around it. It takes typed characters from key events. It doesn't yet support
@@ -133,20 +134,35 @@ impl EditBuffer {
     }
 }
 
-/// What a [`TextInput`] reports when editing ends.
+/// What a [`TextInput`] reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextInputEvent {
-    /// Enter was pressed, or focus moved away: keep this text.
+    /// The text changed; carries the new text.
+    Changed(String),
+    /// Enter was pressed (or, for a [`InputKind::SingleEdit`] field, focus moved away): keep
+    /// this text.
     Confirmed(String),
     /// Escape was pressed: discard the edit.
     Cancelled,
 }
 
-/// A focused one-line text field that reports once, when editing ends.
+/// How long a [`TextInput`] lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputKind {
+    /// Edited once, like a rename: it reports `Confirmed` or `Cancelled` once, and clicking
+    /// away confirms.
+    SingleEdit,
+    /// Stays open, like a search box: Enter and Escape may be pressed many times (or bound to
+    /// actions instead), and losing focus does nothing.
+    Persistent,
+}
+
+/// A focused one-line text field.
 pub struct TextInput {
     buffer: EditBuffer,
+    kind: InputKind,
     focus_handle: FocusHandle,
-    /// Set once an event has been sent, so a blur after Enter or Escape sends nothing.
+    /// Set once a [`InputKind::SingleEdit`] field has reported, so a later blur sends nothing.
     is_finished: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -161,16 +177,38 @@ impl Focusable for TextInput {
 
 impl TextInput {
     /// A field holding `text`, all selected and focused.
-    pub fn new(text: impl Into<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        text: impl Into<String>,
+        kind: InputKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
-        let blur = cx.on_blur(&focus_handle, window, |input, _, cx| input.confirm(cx));
+        let mut subscriptions = Vec::new();
+        if kind == InputKind::SingleEdit {
+            subscriptions.push(cx.on_blur(&focus_handle, window, |input, _, cx| {
+                input.confirm(cx);
+            }));
+        }
         Self {
             buffer: EditBuffer::new(text),
+            kind,
             focus_handle,
             is_finished: false,
-            _subscriptions: vec![blur],
+            _subscriptions: subscriptions,
         }
+    }
+
+    /// The current text.
+    pub fn text(&self) -> &str {
+        self.buffer.text()
+    }
+
+    /// Selects all the text, so typing replaces it.
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.buffer = EditBuffer::new(self.buffer.text());
+        cx.notify();
     }
 
     fn confirm(&mut self, cx: &mut Context<Self>) {
@@ -178,9 +216,13 @@ impl TextInput {
     }
 
     fn finish(&mut self, event: TextInputEvent, cx: &mut Context<Self>) {
-        if !self.is_finished {
-            self.is_finished = true;
-            cx.emit(event);
+        match self.kind {
+            InputKind::Persistent => cx.emit(event),
+            InputKind::SingleEdit if !self.is_finished => {
+                self.is_finished = true;
+                cx.emit(event);
+            }
+            InputKind::SingleEdit => {}
         }
     }
 
@@ -214,7 +256,11 @@ impl TextInput {
                 Edit::Insert(text)
             }
         };
+        let previous = self.buffer.text().to_owned();
         self.buffer.apply(edit);
+        if previous != self.buffer.text() {
+            cx.emit(TextInputEvent::Changed(self.buffer.text().to_owned()));
+        }
         cx.stop_propagation();
         cx.notify();
     }

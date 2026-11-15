@@ -8,7 +8,8 @@ use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 
 use crate::palette::Rgb;
-use crate::selection::VisibleSelection;
+use crate::search::SearchStatus;
+use crate::selection::VisibleRange;
 
 /// The visible screen at one moment.
 #[derive(Clone, Debug, PartialEq)]
@@ -28,7 +29,13 @@ pub struct Snapshot {
     /// Colour of the cursor.
     pub cursor_color: Rgb,
     /// The selected text on screen, if any of the selection is visible.
-    pub selection: Option<VisibleSelection>,
+    pub selection: Option<VisibleRange>,
+    /// Search matches on screen, empty when not searching.
+    pub search_matches: Vec<VisibleRange>,
+    /// The match the search is on, if it is on screen.
+    pub focused_match: Option<VisibleRange>,
+    /// The search's progress, if one is running.
+    pub search_status: Option<SearchStatus>,
 }
 
 impl Snapshot {

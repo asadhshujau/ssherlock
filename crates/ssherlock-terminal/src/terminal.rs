@@ -8,17 +8,19 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::{self, Colors};
+use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{Config, Osc52, Term, point_to_viewport, viewport_to_point};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape as VteCursorShape, NamedColor};
 
 use crate::palette::{Palette, Rgb};
 use crate::pty::PtyExit;
-use crate::selection::{CellSide, GridPoint, SelectionKind, VisibleSelection};
+use crate::search::{MAX_COUNTED_MATCHES, SearchDirection, SearchStatus, literal_pattern};
+use crate::selection::{CellSide, GridPoint, SelectionKind, VisibleRange};
 use crate::size::TerminalSize;
 use crate::snapshot::{CellStyle, Cursor, CursorShape, Snapshot, SnapshotCell, TerminalModes};
 
@@ -52,6 +54,30 @@ pub enum TerminalEvent {
     Exited(PtyExit),
 }
 
+/// How far to scroll the view through the scrollback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScrollAmount {
+    /// This many lines; positive scrolls up, towards older output.
+    Lines(i32),
+    /// One screen up.
+    PageUp,
+    /// One screen down.
+    PageDown,
+    /// To the oldest line.
+    Top,
+    /// Back to the live screen.
+    Bottom,
+}
+
+/// A search the user is running.
+struct ActiveSearch {
+    regex: RegexSearch,
+    /// The match the user is on. Points are fixed in the grid, so new output can leave it
+    /// pointing at older text; the next search step starts from wherever it now is.
+    focused: Option<Match>,
+    status: SearchStatus,
+}
+
 /// A terminal emulator for one program.
 pub struct Terminal {
     term: Term<EventQueue>,
@@ -59,6 +85,7 @@ pub struct Terminal {
     events: mpsc::Receiver<Event>,
     pending_events: Vec<TerminalEvent>,
     pending_reply: Vec<u8>,
+    search: Option<ActiveSearch>,
     size: TerminalSize,
     palette: Palette,
 }
@@ -79,6 +106,7 @@ impl Terminal {
             events,
             pending_events: Vec::new(),
             pending_reply: Vec::new(),
+            search: None,
             size,
             palette: config.palette.clone(),
         }
@@ -157,7 +185,11 @@ impl Terminal {
     }
 
     /// The visible screen, with colours resolved against the palette.
-    pub fn snapshot(&self) -> Snapshot {
+    ///
+    /// Takes `&mut self` only because searching for the visible matches updates the search
+    /// engine's cache.
+    pub fn snapshot(&mut self) -> Snapshot {
+        let (search_matches, focused_match) = self.visible_matches();
         let content = self.term.renderable_content();
         let colors = Resolver {
             palette: &self.palette,
@@ -199,8 +231,170 @@ impl Terminal {
             cursor_color: colors.lookup(NamedColor::Cursor as usize),
             selection: content
                 .selection
-                .and_then(|range| self.visible_selection(range, display_offset)),
+                .and_then(|range| self.visible_range(range.start, range.end, range.is_block)),
+            search_matches,
+            focused_match,
+            search_status: self.search.as_ref().map(|search| search.status),
         }
+    }
+
+    /// Scrolls the view through the scrollback. Output keeps arriving underneath; the view stays
+    /// on the same text until scrolled back to the bottom.
+    pub fn scroll(&mut self, amount: ScrollAmount) {
+        let scroll = match amount {
+            ScrollAmount::Lines(lines) => Scroll::Delta(lines),
+            ScrollAmount::PageUp => Scroll::PageUp,
+            ScrollAmount::PageDown => Scroll::PageDown,
+            ScrollAmount::Top => Scroll::Top,
+            ScrollAmount::Bottom => Scroll::Bottom,
+        };
+        self.term.scroll_display(scroll);
+    }
+
+    /// Whether the view is scrolled up into the scrollback.
+    pub fn is_scrolled_back(&self) -> bool {
+        self.term.grid().display_offset() > 0
+    }
+
+    /// Deletes the scrollback, keeping the screen.
+    pub fn clear_scrollback(&mut self) {
+        self.term.grid_mut().clear_history();
+        // Both may point into lines that no longer exist.
+        self.term.selection = None;
+        if let Some(search) = &mut self.search {
+            search.focused = None;
+        }
+        self.refresh_search_status();
+    }
+
+    /// Resets the terminal as if newly started (`RIS`), also deleting the scrollback. For when
+    /// a program has left it in a bad state (wrong character set, stuck modes).
+    pub fn reset(&mut self) {
+        self.feed(b"\x1bc");
+        self.search = None;
+        self.clear_scrollback();
+    }
+
+    /// Searches the screen and scrollback for `query`, focusing the newest match and scrolling
+    /// to it. An empty query ends the search.
+    pub fn set_search(&mut self, query: &str) {
+        if query.is_empty() {
+            self.search = None;
+            return;
+        }
+        let regex = match RegexSearch::new(&literal_pattern(query)) {
+            Ok(regex) => regex,
+            Err(error) => {
+                // The pattern is escaped, so this means the query is too long for the engine.
+                tracing::warn!(%error, "could not search for this text");
+                self.search = None;
+                return;
+            }
+        };
+        self.search = Some(ActiveSearch {
+            regex,
+            focused: None,
+            status: SearchStatus {
+                total: 0,
+                current: None,
+                is_capped: false,
+            },
+        });
+        let bottom = Point::new(self.term.bottommost_line(), self.term.last_column());
+        self.focus_match_from(bottom, SearchDirection::Older);
+    }
+
+    /// Moves to the next match in `direction`, wrapping around at the ends.
+    pub fn search_next(&mut self, direction: SearchDirection) {
+        let Some(search) = &self.search else {
+            return;
+        };
+        let origin = match (&search.focused, direction) {
+            (Some(focused), SearchDirection::Older) => {
+                focused.start().sub(&self.term, Boundary::None, 1)
+            }
+            (Some(focused), SearchDirection::Newer) => {
+                focused.end().add(&self.term, Boundary::None, 1)
+            }
+            (None, SearchDirection::Older) => {
+                Point::new(self.term.bottommost_line(), self.term.last_column())
+            }
+            (None, SearchDirection::Newer) => Point::new(self.term.topmost_line(), Column(0)),
+        };
+        self.focus_match_from(origin, direction);
+    }
+
+    /// Ends the search.
+    pub fn clear_search(&mut self) {
+        self.search = None;
+    }
+
+    /// The search's progress, if one is running.
+    pub fn search_status(&self) -> Option<SearchStatus> {
+        self.search.as_ref().map(|search| search.status)
+    }
+
+    fn focus_match_from(&mut self, origin: Point, direction: SearchDirection) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        let (direction, side) = match direction {
+            SearchDirection::Older => (Direction::Left, Side::Left),
+            SearchDirection::Newer => (Direction::Right, Side::Right),
+        };
+        search.focused = self
+            .term
+            .search_next(&mut search.regex, origin, direction, side, None);
+        if let Some(focused) = &search.focused {
+            self.term.scroll_to_point(*focused.start());
+        }
+        self.refresh_search_status();
+    }
+
+    /// Counts the matches and finds the focused one's position among them.
+    fn refresh_search_status(&mut self) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        let start = Point::new(self.term.topmost_line(), Column(0));
+        let end = Point::new(self.term.bottommost_line(), self.term.last_column());
+        let mut total = 0;
+        let mut current = None;
+        let mut is_capped = false;
+        for found in RegexIter::new(start, end, Direction::Right, &self.term, &mut search.regex) {
+            if total == MAX_COUNTED_MATCHES {
+                is_capped = true;
+                break;
+            }
+            total += 1;
+            if search.focused.as_ref() == Some(&found) {
+                current = Some(total);
+            }
+        }
+        search.status = SearchStatus {
+            total,
+            current,
+            is_capped,
+        };
+    }
+
+    /// The search matches on the visible screen, and the focused one if it is visible.
+    fn visible_matches(&mut self) -> (Vec<VisibleRange>, Option<VisibleRange>) {
+        let Some(search) = &mut self.search else {
+            return (Vec::new(), None);
+        };
+        let offset = i32::try_from(self.term.grid().display_offset()).unwrap_or(i32::MAX);
+        let top = Line(-offset);
+        let bottom = top + (self.term.screen_lines().saturating_sub(1));
+        let start = Point::new(top, Column(0));
+        let end = Point::new(bottom, self.term.last_column());
+        let found: Vec<Match> =
+            RegexIter::new(start, end, Direction::Right, &self.term, &mut search.regex).collect();
+        let focused = search.focused.clone();
+        let visible = |found: &Match| self.visible_range(*found.start(), *found.end(), false);
+        let matches = found.iter().filter_map(&visible).collect();
+        let focused = focused.as_ref().and_then(visible);
+        (matches, focused)
     }
 
     /// Starts a new selection at a visible cell, replacing any existing one.
@@ -245,47 +439,36 @@ impl Terminal {
         )
     }
 
-    /// The part of `range` on the visible screen.
-    fn visible_selection(
-        &self,
-        range: SelectionRange,
-        display_offset: usize,
-    ) -> Option<VisibleSelection> {
+    /// The part of the grid range `start..=end` on the visible screen.
+    fn visible_range(&self, start: Point, end: Point, is_block: bool) -> Option<VisibleRange> {
+        let display_offset = self.term.grid().display_offset();
         let rows = self.term.screen_lines();
         let last_column = self.term.columns().saturating_sub(1);
         let offset = i64::try_from(display_offset).ok()?;
         let to_row = |line: i32| i64::from(line) + offset;
-        let (start_row, end_row) = (to_row(range.start.line.0), to_row(range.end.line.0));
+        let (start_row, end_row) = (to_row(start.line.0), to_row(end.line.0));
         let last_row = i64::try_from(rows).ok()? - 1;
         if end_row < 0 || start_row > last_row {
             return None;
         }
         // Rows cut off above or below the screen continue from the first column or to the
         // last, except in a block selection, which keeps its columns.
-        let start = if start_row < 0 {
-            let column = if range.is_block {
-                range.start.column.0
-            } else {
-                0
-            };
+        let first = if start_row < 0 {
+            let column = if is_block { start.column.0 } else { 0 };
             GridPoint::new(0, column)
         } else {
-            GridPoint::new(usize::try_from(start_row).ok()?, range.start.column.0)
+            GridPoint::new(usize::try_from(start_row).ok()?, start.column.0)
         };
-        let end = if end_row > last_row {
-            let column = if range.is_block {
-                range.end.column.0
-            } else {
-                last_column
-            };
+        let last = if end_row > last_row {
+            let column = if is_block { end.column.0 } else { last_column };
             GridPoint::new(usize::try_from(last_row).ok()?, column)
         } else {
-            GridPoint::new(usize::try_from(end_row).ok()?, range.end.column.0)
+            GridPoint::new(usize::try_from(end_row).ok()?, end.column.0)
         };
-        Some(VisibleSelection {
-            start,
-            end,
-            is_block: range.is_block,
+        Some(VisibleRange {
+            start: first,
+            end: last,
+            is_block,
         })
     }
 
@@ -474,6 +657,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::search::SearchDirection;
     use crate::snapshot::{MouseEncoding, MouseReporting, Underline};
 
     fn terminal(columns: u16, rows: u16) -> Terminal {
@@ -910,7 +1094,7 @@ mod tests {
         );
         assert_eq!(
             term.snapshot().selection,
-            Some(VisibleSelection {
+            Some(VisibleRange {
                 start: GridPoint::new(0, 1),
                 end: GridPoint::new(1, 1),
                 is_block: false,
@@ -921,7 +1105,7 @@ mod tests {
         term.feed(b"\r\nfour");
         assert_eq!(
             term.snapshot().selection,
-            Some(VisibleSelection {
+            Some(VisibleRange {
                 start: GridPoint::new(0, 0),
                 end: GridPoint::new(0, 1),
                 is_block: false,
@@ -953,6 +1137,167 @@ mod tests {
         term.clear_selection();
         term.extend_selection(GridPoint::new(0, 1), CellSide::Right);
         assert_eq!(term.selection_text(), None);
+    }
+
+    /// A 10×3 terminal that printed `line 0` … `line 9`, leaving 8 lines of scrollback.
+    fn with_history() -> Terminal {
+        let mut term = terminal(10, 3);
+        for i in 0..10 {
+            term.feed(format!("line {i}\r\n").as_bytes());
+        }
+        term
+    }
+
+    #[test]
+    fn scrolling_moves_the_view_through_history() {
+        let cases = [
+            ("three lines up", vec![ScrollAmount::Lines(3)], 3, "line 5"),
+            ("page up", vec![ScrollAmount::PageUp], 3, "line 5"),
+            ("top", vec![ScrollAmount::Top], 8, "line 0"),
+            ("past the top", vec![ScrollAmount::Lines(100)], 8, "line 0"),
+            (
+                "down again",
+                vec![ScrollAmount::Top, ScrollAmount::Lines(-2)],
+                6,
+                "line 2",
+            ),
+            (
+                "page down",
+                vec![ScrollAmount::Top, ScrollAmount::PageDown],
+                5,
+                "line 3",
+            ),
+            (
+                "bottom",
+                vec![ScrollAmount::Top, ScrollAmount::Bottom],
+                0,
+                "line 8",
+            ),
+        ];
+        for (name, scrolls, offset, first_row) in cases {
+            let mut term = with_history();
+            for scroll in scrolls {
+                term.scroll(scroll);
+            }
+            let snapshot = term.snapshot();
+            assert_eq!(snapshot.display_offset, offset, "{name}");
+            assert_eq!(row_text(&snapshot, 0), first_row, "{name}");
+            assert_eq!(term.is_scrolled_back(), offset > 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_view_stays_on_its_text_while_output_arrives() {
+        let mut term = with_history();
+        term.scroll(ScrollAmount::Lines(2));
+        term.feed(b"new\r\n");
+        let snapshot = term.snapshot();
+        assert_eq!(row_text(&snapshot, 0), "line 6");
+        // The cursor is below the view.
+        assert_eq!(snapshot.cursor, None);
+    }
+
+    #[test]
+    fn clear_scrollback_keeps_the_screen() {
+        let mut term = with_history();
+        term.scroll(ScrollAmount::Top);
+        term.clear_scrollback();
+        let snapshot = term.snapshot();
+        assert_eq!((snapshot.history_size, snapshot.display_offset), (0, 0));
+        assert_eq!(screen_text(&snapshot), ["line 8", "line 9", ""]);
+    }
+
+    #[test]
+    fn reset_clears_everything_and_restores_modes() {
+        let mut term = with_history();
+        term.feed(b"\x1b[?1h\x1b[?2004h\x1b[31mred");
+        term.set_search("line");
+        term.reset();
+        let snapshot = term.snapshot();
+        assert_eq!(snapshot.history_size, 0);
+        assert_eq!(screen_text(&snapshot), ["", "", ""]);
+        assert!(!snapshot.modes.is_app_cursor());
+        assert!(!snapshot.modes.is_bracketed_paste());
+        assert_eq!(snapshot.search_status, None);
+        term.feed(b"x");
+        assert_eq!(
+            term.snapshot().cell(0, 0).unwrap().fg,
+            term.palette().foreground
+        );
+    }
+
+    #[test]
+    fn search_finds_matches_in_the_scrollback_newest_first() {
+        let mut term = with_history();
+        term.set_search("LINE 2");
+        assert_eq!(
+            term.search_status().unwrap().total,
+            0,
+            "smart case: upper case is exact"
+        );
+
+        term.set_search("line");
+        let status = term.search_status().unwrap();
+        assert_eq!(
+            (status.total, status.current, status.is_capped),
+            (10, Some(10), false)
+        );
+        // The newest match is on screen and focused.
+        let snapshot = term.snapshot();
+        assert_eq!(snapshot.search_matches.len(), 2);
+        assert_eq!(
+            snapshot.focused_match,
+            Some(VisibleRange {
+                start: GridPoint::new(1, 0),
+                end: GridPoint::new(1, 3),
+                is_block: false,
+            })
+        );
+
+        // Going older scrolls the view to keep the match visible.
+        for _ in 0..5 {
+            term.search_next(SearchDirection::Older);
+        }
+        let snapshot = term.snapshot();
+        assert_eq!(snapshot.search_status.unwrap().current, Some(5));
+        let focused = snapshot.focused_match.expect("focused match is visible");
+        assert_eq!(row_text(&snapshot, focused.start.row), "line 4");
+        assert!(snapshot.display_offset > 0);
+
+        term.search_next(SearchDirection::Newer);
+        assert_eq!(term.search_status().unwrap().current, Some(6));
+    }
+
+    #[test]
+    fn search_wraps_and_is_literal() {
+        let mut term = terminal(20, 3);
+        term.feed(b"a.c abc a.c");
+        term.set_search("a.c");
+        assert_eq!(term.search_status().unwrap().total, 2, "the dot is literal");
+        assert_eq!(term.search_status().unwrap().current, Some(2));
+        term.search_next(SearchDirection::Newer);
+        assert_eq!(
+            term.search_status().unwrap().current,
+            Some(1),
+            "wraps to the oldest"
+        );
+        term.search_next(SearchDirection::Older);
+        assert_eq!(
+            term.search_status().unwrap().current,
+            Some(2),
+            "wraps to the newest"
+        );
+
+        term.set_search("zzz");
+        let status = term.search_status().unwrap();
+        assert_eq!((status.total, status.current), (0, None));
+        assert_eq!(term.snapshot().search_matches, []);
+
+        term.set_search("");
+        assert_eq!(term.search_status(), None);
+        term.set_search("abc");
+        term.clear_search();
+        assert_eq!(term.snapshot().search_status, None);
     }
 
     #[test]

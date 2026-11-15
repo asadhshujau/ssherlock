@@ -82,6 +82,8 @@ pub struct Colors {
     pub tab_active: Hsla,
     /// Background of a hovered inactive tab.
     pub tab_hover: Hsla,
+    /// The thumb of an overlay scrollbar.
+    pub scrollbar: Hsla,
 }
 
 /// Colours inside a terminal: the 16 ANSI colours programs pick from, plus defaults.
@@ -97,6 +99,10 @@ pub struct TerminalColors {
     pub cursor: Hsla,
     /// Behind selected text.
     pub selection: Hsla,
+    /// Behind search matches.
+    pub search_match: Hsla,
+    /// Behind the search match the user is on.
+    pub search_match_focused: Hsla,
 }
 
 /// Spacing scale for gaps and padding.
@@ -168,6 +174,10 @@ pub struct Metrics {
     pub tab_max_width: Pixels,
     /// Thickness of the active-tab and drop-target markers.
     pub tab_indicator: Pixels,
+    /// Width of an overlay scrollbar.
+    pub scrollbar_width: Pixels,
+    /// Width of the text field in a search bar.
+    pub search_field_width: Pixels,
 }
 
 impl Theme {
@@ -199,6 +209,7 @@ impl Theme {
                 tab_bar: rgb(0x0016_181c).into(),
                 tab_active: rgb(0x001b_1d22).into(),
                 tab_hover: rgb(0x0020_2329).into(),
+                scrollbar: rgba(0xffff_ff40).into(),
             },
             terminal: TerminalColors {
                 ansi: [
@@ -223,6 +234,8 @@ impl Theme {
                 background: rgb(0x001b_1d22).into(),
                 cursor: rgb(0x00e0_a84a).into(),
                 selection: rgba(0xe0a8_4a4d).into(),
+                search_match: rgba(0x5cbe_c740).into(),
+                search_match_focused: rgba(0xe0c0_7880).into(),
             },
             spacing: Spacing::default(),
             radius: Radius::default(),
@@ -251,6 +264,7 @@ impl Theme {
                 tab_bar: rgb(0x00eb_ecef).into(),
                 tab_active: rgb(0x00f7_f7f8).into(),
                 tab_hover: rgb(0x00e2_e4e8).into(),
+                scrollbar: rgba(0x0000_0040).into(),
             },
             terminal: TerminalColors {
                 ansi: [
@@ -275,6 +289,8 @@ impl Theme {
                 background: rgb(0x00f7_f7f8).into(),
                 cursor: rgb(0x00a8_6a00).into(),
                 selection: rgba(0xa86a_0038).into(),
+                search_match: rgba(0x1778_8933).into(),
+                search_match_focused: rgba(0xc290_0066).into(),
             },
             spacing: Spacing::default(),
             radius: Radius::default(),
@@ -333,6 +349,8 @@ impl Default for Metrics {
             tab_min_width: px(96.),
             tab_max_width: px(220.),
             tab_indicator: px(2.),
+            scrollbar_width: px(6.),
+            search_field_width: px(220.),
         }
     }
 }

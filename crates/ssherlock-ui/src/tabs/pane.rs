@@ -11,7 +11,7 @@ use super::actions::{
     CloseTab, MoveTabLeft, MoveTabRight, NewTab, NextTab, PreviousTab, RenameTab,
 };
 use super::list::{Step, TabList};
-use crate::components::{Tab, TabBar, TextInput, TextInputEvent};
+use crate::components::{InputKind, Tab, TabBar, TextInput, TextInputEvent};
 use crate::terminal::{TerminalView, TerminalViewEvent};
 use crate::theme::ActiveTheme as _;
 
@@ -205,7 +205,7 @@ impl Pane {
         };
         let id = tab.view.entity_id();
         let current = label(tab, cx);
-        let input = cx.new(|cx| TextInput::new(current, window, cx));
+        let input = cx.new(|cx| TextInput::new(current, InputKind::SingleEdit, window, cx));
         let subscription = cx.subscribe_in(&input, window, move |pane, _, event, window, cx| {
             pane.finish_rename(id, event, window, cx);
         });
@@ -224,6 +224,9 @@ impl Pane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let TextInputEvent::Changed(_) = event {
+            return;
+        }
         if let TextInputEvent::Confirmed(text) = event
             && let Some(index) = self.tabs.position(|tab| tab.view.entity_id() == id)
             && let Some(tab) = self.tabs.get_mut(index)

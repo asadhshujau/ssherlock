@@ -16,6 +16,7 @@ pub mod handle;
 pub mod input;
 pub mod palette;
 pub mod pty;
+pub mod search;
 pub mod selection;
 pub mod size;
 pub mod snapshot;
@@ -31,10 +32,11 @@ pub use palette::{Palette, Rgb};
 pub use pty::{
     PtyExit, PtyInput, PtyIo, PtyOutput, PtyPeer, ShellConfig, ShellProgram, spawn_local,
 };
-pub use selection::{CellSide, GridPoint, SelectionKind, VisibleSelection};
+pub use search::{SearchDirection, SearchStatus};
+pub use selection::{CellSide, GridPoint, SelectionKind, VisibleRange};
 pub use size::TerminalSize;
 pub use snapshot::{
     CellStyle, Cursor, CursorShape, MouseEncoding, MouseReporting, Snapshot, SnapshotCell,
     TerminalModes, Underline,
 };
-pub use terminal::{Terminal, TerminalConfig, TerminalEvent};
+pub use terminal::{ScrollAmount, Terminal, TerminalConfig, TerminalEvent};

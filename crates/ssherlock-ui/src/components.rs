@@ -5,4 +5,4 @@ pub mod tab_bar;
 pub mod text_input;
 
 pub use tab_bar::{Tab, TabBar};
-pub use text_input::{TextInput, TextInputEvent};
+pub use text_input::{InputKind, TextInput, TextInputEvent};
