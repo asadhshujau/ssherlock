@@ -149,6 +149,10 @@ manager is running, so gpui falls back to server-side decorations. The log has a
 xinput mouse pointers" error, because Xvfb has no input devices. Opening a link logs "Failed to
 open with dbus", because the bus is disabled on purpose.
 
+Xvfb only exercises gpui's X11 backend. To test as a Wayland client, under weston or a headless
+GNOME Shell (for clipboard, focus and keyboard behaviour), see
+[docs/headless-wayland.md](docs/headless-wayland.md).
+
 On macOS the app runs on the real display. `screencapture -x out.png` is built in; the app that
 runs it (your terminal or editor) needs the Screen Recording permission.
 

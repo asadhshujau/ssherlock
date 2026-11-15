@@ -3,6 +3,8 @@
 SSHerlock is a desktop SSH client (a Termius replacement) written in Rust with gpui.
 This file is the contract for everyone who writes code here, human or Claude.
 Read `docs/PLAN.md` for architecture and phases, `docs/FEATURES.md` for what to build.
+AI assistants also follow the maintainer's working notes, which are imported here and kept in the repo
+so they apply on every machine: @docs/AI-WORKFLOW.md
 
 ## 1. Non-negotiables
 
