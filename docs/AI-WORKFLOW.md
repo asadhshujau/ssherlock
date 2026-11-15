@@ -57,6 +57,12 @@ If the maintainer grants a standing exception, record it here with its scope. Du
 they allowed reading docs.rs and the registry sources of `alacritty_terminal`, `portable-pty`
 and `gpui`. That exception ended with Phase 1.
 
+Standing exceptions:
+
+- **`~/.cargo`, any time.** Reading anything under `~/.cargo`, such as dependency sources in
+  `~/.cargo/registry/src/`, needs no asking (granted 2026-11-15).
+- **docs.rs for `russh`, during Phase 2.** Ends when Phase 2 is done.
+
 ## Test servers, never real ones
 
 Test SSH against servers you start yourself: the Docker OpenSSH container in
