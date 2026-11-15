@@ -15,7 +15,8 @@ sudo pacman -S weston wl-clipboard        # Arch
 ```
 
 Use the sandboxing from the README here too: own `HOME`/`XDG_DATA_HOME`,
-`SHELL=/bin/sh`, `DBUS_SESSION_BUS_ADDRESS=disabled:` and stub openers on `PATH`. The
+`SHELL=/bin/sh`, `DBUS_SESSION_BUS_ADDRESS=disabled:`, no `SSH_AUTH_SOCK`/`SSH_AGENT_PID`, and
+stub openers on `PATH`. The
 snippets below assume `$sandbox` and `$sandbox/stubs` exist as set up there.
 
 A Wayland socket path must be under 108 bytes, so keep `XDG_RUNTIME_DIR` short, for example
@@ -34,7 +35,7 @@ env -u WAYLAND_DISPLAY DISPLAY=:98 XDG_RUNTIME_DIR="$run" DBUS_SESSION_BUS_ADDRE
   HOME="$sandbox" weston --backend=x11 --width=1280 --height=800 --socket=wl-test --idle-time=0 &
 weston=$!
 sleep 3
-env -u DISPLAY WAYLAND_DISPLAY=wl-test XDG_RUNTIME_DIR="$run" HOME="$sandbox" \
+env -u DISPLAY -u SSH_AUTH_SOCK -u SSH_AGENT_PID WAYLAND_DISPLAY=wl-test XDG_RUNTIME_DIR="$run" HOME="$sandbox" \
   XDG_DATA_HOME="$sandbox/share" SHELL=/bin/sh DBUS_SESSION_BUS_ADDRESS=disabled: \
   PATH="$sandbox/stubs:$PATH" RUST_LOG=ssherlock_ui=debug \
   VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./target/debug/ssherlock & app=$!
