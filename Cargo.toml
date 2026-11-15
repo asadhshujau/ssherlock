@@ -53,6 +53,8 @@ serde_json = "1.0.154"
 secrecy = "0.10.3"
 # Wipe buffers that held key material.
 zeroize = "1.9.1"
+# VT parser, grid, scrollback, selection and search for the terminal (same choice as Zed).
+alacritty_terminal = { version = "0.26.0", default-features = false }
 # Readable diffs in test assertions.
 pretty_assertions = "1.4.1"
 
