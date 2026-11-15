@@ -198,7 +198,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [ ] **TEAM-07** Policies: enforce 2FA, forbid password auth, session recording (Team)
 - [ ] **TEAM-08** Invite flow, remove member → rotate shared secrets (Team)
 
-## 11. AI assistant — "Watson" (AI)
+## 11. AI assistant — "WWWatson" (AI)
 
 - [ ] **AI-01** Natural language → shell command, shown with explanation, never auto-run (Pro)
 - [ ] **AI-02** Explain the last error output (Pro)

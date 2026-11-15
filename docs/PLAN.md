@@ -318,13 +318,13 @@ Features: TEAM-01…08, SNIP-09.
 
 ---
 
-## Phase 13 — Watson, the AI assistant (M)
+## Phase 13 — WWWatson, the AI assistant (M)
 
 Work:
 
 - `ssherlock-ai`: `Provider` trait; first impl Claude API (default model `claude-sonnet-5-5`, user-selectable), BYOK key stored in the vault; HTTP via `reqwest`.
 - Redaction pass (hostnames, IPs, tokens, anything from the vault) before any request; visible "what will be sent" panel.
-- Commands: "ask Watson" → NL to command with explanation, inserted into the prompt but never executed; "explain this error" on selected output.
+- Commands: "ask WWWatson" → NL to command with explanation, inserted into the prompt but never executed; "explain this error" on selected output.
 - Context: host OS, shell, cwd from shell integration.
 - Entire feature hidden when no provider configured.
 
