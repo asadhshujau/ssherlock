@@ -6433,6 +6433,7 @@ dependencies = [
  "secrecy",
  "sha1",
  "ssherlock-core",
+ "ssherlock-terminal",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",

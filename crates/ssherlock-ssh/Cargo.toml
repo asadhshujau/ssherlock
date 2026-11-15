@@ -16,6 +16,7 @@ russh = { workspace = true }
 secrecy = { workspace = true }
 sha1 = { workspace = true }
 ssherlock-core = { workspace = true }
+ssherlock-terminal = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net", "io-util", "fs"] }
 tokio-util = { workspace = true }

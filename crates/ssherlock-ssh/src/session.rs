@@ -229,6 +229,10 @@ impl Session {
         authenticator.run(methods).instrument(span).await
     }
 
+    pub(crate) fn handle(&self) -> &client::Handle<ClientHandler> {
+        &self.handle
+    }
+
     /// What this session connected to.
     pub fn config(&self) -> &ConnectConfig {
         &self.config
