@@ -79,6 +79,25 @@ pub struct KnownKey {
     pub key: PublicKey,
 }
 
+impl KnownKey {
+    /// The key's `SHA256:…` fingerprint, as OpenSSH shows it.
+    pub fn fingerprint(&self) -> String {
+        fingerprint(&self.key)
+    }
+}
+
+/// `key`'s `SHA256:…` fingerprint, as OpenSSH shows it.
+pub fn fingerprint(key: &PublicKey) -> String {
+    key.fingerprint(russh::keys::HashAlg::Sha256).to_string()
+}
+
+/// `key`'s fingerprint as randomart, the picture `ssh-keygen -lv` draws.
+pub fn randomart(key: &PublicKey) -> String {
+    let header = format!("[{}]", key.algorithm().as_str());
+    key.fingerprint(russh::keys::HashAlg::Sha256)
+        .to_randomart(&header)
+}
+
 /// A line in a `known_hosts` file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnownKeyLocation {

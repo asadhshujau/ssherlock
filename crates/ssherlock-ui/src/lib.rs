@@ -9,6 +9,7 @@ pub mod keymap;
 pub mod main_window;
 pub mod platform;
 pub mod runtime;
+pub mod ssh;
 pub mod tabs;
 pub mod terminal;
 pub mod theme;
@@ -29,6 +30,7 @@ pub fn init(tokio: tokio::runtime::Handle, cx: &mut App) {
     )));
     terminal::init(cx);
     tabs::init(cx);
+    ssh::init(cx);
     // Last, so every feature's actions exist when their bindings are built.
     keymap::init(cx);
 

@@ -20,6 +20,10 @@ use crate::host_keys::HostKeys;
 use crate::session::{ConnectConfig, Session, SessionEvent};
 use crate::shell::{OpenShell, ShellEnd, bridge};
 
+/// Written into the terminal between the old shell's output and the new one's: a new line,
+/// then "reconnected" in faint text (SGR 2, reset by SGR 22).
+const RECONNECTED_NOTICE: &[u8] = b"\r\n\x1b[2m-- reconnected --\x1b[22m\r\n";
+
 /// How often to check that the server still answers, and when to give up on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeepAlive {
@@ -100,8 +104,12 @@ impl RemoteShellConfig {
 /// Where a connection is, for the status indicator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
-    /// Opening TCP and checking the host key.
-    Connecting,
+    /// Opening TCP and checking the host key. `attempt` is 0 for the first connection, then
+    /// the reconnect attempt's number.
+    Connecting {
+        /// 0 first, then 1, 2, … for reconnects.
+        attempt: u32,
+    },
     /// Logging in.
     Authenticating,
     /// The shell is running. `latency` is the last keep-alive round trip, once measured.
@@ -180,13 +188,16 @@ impl Supervisor {
         let mut attempt = 0;
         let mut has_connected = false;
         let reason = loop {
-            self.state(ConnectionState::Connecting).await;
+            self.state(ConnectionState::Connecting { attempt }).await;
             let established = tokio::select! {
                 result = self.establish() => result,
                 () = self.peer.output.closed() => break DisconnectReason::Closed,
             };
             match established {
                 Ok((session, shell)) => {
+                    if has_connected && !self.mark_reconnected().await {
+                        break DisconnectReason::Closed;
+                    }
                     has_connected = true;
                     attempt = 0;
                     match self.connected(&session, shell).await {
@@ -287,6 +298,16 @@ impl Supervisor {
                 },
             }
         }
+    }
+
+    /// Writes a dim line into the terminal so the new shell's output doesn't run on from the
+    /// old prompt. Returns `false` if the terminal is gone.
+    async fn mark_reconnected(&self) -> bool {
+        self.peer
+            .output
+            .send(PtyOutput::Data(RECONNECTED_NOTICE.to_vec()))
+            .await
+            .is_ok()
     }
 
     async fn state(&self, state: ConnectionState) {

@@ -148,13 +148,12 @@ impl HostKeyPrompt {
 
     /// The key's `SHA256:…` fingerprint, as OpenSSH shows it.
     pub fn fingerprint(&self) -> String {
-        self.key.fingerprint(HashAlg::Sha256).to_string()
+        crate::known_hosts::fingerprint(&self.key)
     }
 
     /// The fingerprint's randomart picture, as `ssh-keygen -lv` draws it.
     pub fn randomart(&self) -> String {
-        let header = format!("[{}]", self.key.algorithm().as_str());
-        self.key.fingerprint(HashAlg::Sha256).to_randomart(&header)
+        crate::known_hosts::randomart(&self.key)
     }
 
     /// Sends the user's decision to the waiting session.

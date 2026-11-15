@@ -41,4 +41,21 @@ impl AppDirs {
     pub fn data_local(&self) -> &Path {
         &self.data_local
     }
+
+    /// SSHerlock's own `known_hosts`, where host keys the user trusts are saved.
+    pub fn known_hosts(&self) -> PathBuf {
+        self.data_local.join("known_hosts")
+    }
+}
+
+/// The user's `~/.ssh`, for OpenSSH's `known_hosts` and default keys, if there's a home directory.
+pub fn ssh_dir() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".ssh"))
+}
+
+/// The local user name, for connections typed without `user@`.
+pub fn local_user() -> Option<String> {
+    ["USER", "USERNAME", "LOGNAME"]
+        .iter()
+        .find_map(|var| std::env::var(var).ok().filter(|name| !name.is_empty()))
 }

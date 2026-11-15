@@ -90,6 +90,14 @@ pub struct Colors {
     pub tab_hover: Hsla,
     /// The thumb of an overlay scrollbar.
     pub scrollbar: Hsla,
+    /// Background of a destructive or risky action's button.
+    pub danger: Hsla,
+    /// Text on top of `danger`.
+    pub danger_text: Hsla,
+    /// Status dot: healthy (connected).
+    pub success: Hsla,
+    /// Status dot: in progress or degraded (connecting, reconnecting).
+    pub warning: Hsla,
 }
 
 /// Colours inside a terminal: the 16 ANSI colours programs pick from, plus defaults.
@@ -190,6 +198,8 @@ pub struct Metrics {
     pub modal_width: Pixels,
     /// Narrowest a context menu gets.
     pub menu_width: Pixels,
+    /// Diameter of a status dot (connection state).
+    pub status_dot: Pixels,
 }
 
 impl Theme {
@@ -225,6 +235,10 @@ impl Theme {
                 tab_active: rgb(0x001b_1d22).into(),
                 tab_hover: rgb(0x0020_2329).into(),
                 scrollbar: rgba(0xffff_ff40).into(),
+                danger: rgb(0x00d1_3b33).into(),
+                danger_text: rgb(0x00ff_ffff).into(),
+                success: rgb(0x0063_b96f).into(),
+                warning: rgb(0x00e0_a84a).into(),
             },
             terminal: TerminalColors {
                 ansi: [
@@ -284,6 +298,10 @@ impl Theme {
                 tab_active: rgb(0x00f7_f7f8).into(),
                 tab_hover: rgb(0x00e2_e4e8).into(),
                 scrollbar: rgba(0x0000_0040).into(),
+                danger: rgb(0x00c6_2828).into(),
+                danger_text: rgb(0x00ff_ffff).into(),
+                success: rgb(0x002e_7d32).into(),
+                warning: rgb(0x00b2_6a00).into(),
             },
             terminal: TerminalColors {
                 ansi: [
@@ -373,6 +391,7 @@ impl Default for Metrics {
             search_field_width: px(220.),
             modal_width: px(480.),
             menu_width: px(220.),
+            status_dot: px(8.),
         }
     }
 }
@@ -482,6 +501,11 @@ mod tests {
                     c.control_close_hover,
                     4.5,
                 ),
+                ("danger button label", c.danger_text, c.danger, 4.5),
+                // Status dots are graphics, which WCAG asks 3:1 of.
+                ("success dot on surface", c.success, c.surface, 3.0),
+                ("warning dot on surface", c.warning, c.surface, 3.0),
+                ("danger dot on surface", c.danger, c.surface, 3.0),
             ];
             for (name, fg, bg, minimum) in pairs {
                 let ratio = contrast(fg, bg);

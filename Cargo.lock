@@ -6473,9 +6473,11 @@ dependencies = [
  "serde",
  "serde_json",
  "ssherlock-core",
+ "ssherlock-ssh",
  "ssherlock-terminal",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

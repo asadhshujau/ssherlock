@@ -38,6 +38,7 @@ pub struct Modal {
     message: SharedString,
     detail: Option<DetailBuilder>,
     confirm_label: SharedString,
+    is_danger: bool,
     focus_handle: FocusHandle,
 }
 
@@ -66,8 +67,17 @@ impl Modal {
             message: message.into(),
             detail: None,
             confirm_label: confirm_label.into(),
+            is_danger: false,
             focus_handle,
         }
+    }
+
+    /// Marks confirming as risky: the confirm button turns red and Enter no longer confirms,
+    /// so it takes a deliberate click. Escape still cancels.
+    #[must_use]
+    pub fn danger(mut self) -> Self {
+        self.is_danger = true;
+        self
     }
 
     /// Shows `detail` below the message, e.g. a preview of what will happen.
@@ -80,9 +90,10 @@ impl Modal {
         self
     }
 
-    #[allow(clippy::unused_self, reason = "gpui action listeners take `&mut self`")]
     fn confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(ModalEvent::Confirmed);
+        if !self.is_danger {
+            cx.emit(ModalEvent::Confirmed);
+        }
     }
 
     #[allow(clippy::unused_self, reason = "gpui action listeners take `&mut self`")]
@@ -151,9 +162,14 @@ impl Render for Modal {
                             )))
                             .child(
                                 Button::new("confirm", self.confirm_label.clone())
-                                    .style(ButtonStyle::Primary)
-                                    .on_click(cx.listener(|modal, _, window, cx| {
-                                        modal.confirm(&Confirm, window, cx);
+                                    .style(if self.is_danger {
+                                        ButtonStyle::Danger
+                                    } else {
+                                        ButtonStyle::Primary
+                                    })
+                                    // A click is deliberate, so it confirms even a danger dialog.
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        cx.emit(ModalEvent::Confirmed);
                                     })),
                             ),
                     ),
@@ -175,9 +191,15 @@ mod tests {
 
     /// Opens a dialog and returns the events it emits after `keys` are pressed.
     fn events_after(keys: &str, cx: &mut TestAppContext) -> Vec<ModalEvent> {
+        events_after_in(keys, false, cx)
+    }
+
+    fn events_after_in(keys: &str, is_danger: bool, cx: &mut TestAppContext) -> Vec<ModalEvent> {
         cx.update(crate::keymap::init);
-        let (modal, cx) =
-            cx.add_window_view(|window, cx| Modal::new("Title", "Message", "OK", window, cx));
+        let (modal, cx) = cx.add_window_view(|window, cx| {
+            let modal = Modal::new("Title", "Message", "OK", window, cx);
+            if is_danger { modal.danger() } else { modal }
+        });
         let seen = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&seen);
         let _subscription = cx.update(|_, cx| {
@@ -222,5 +244,15 @@ mod tests {
     #[gpui::test]
     fn escape_cancels(cx: &mut TestAppContext) {
         assert_eq!(events_after("escape", cx), [ModalEvent::Cancelled]);
+    }
+
+    #[gpui::test]
+    fn enter_does_not_confirm_a_danger_dialog(cx: &mut TestAppContext) {
+        assert_eq!(events_after_in("enter", true, cx), Vec::<ModalEvent>::new());
+    }
+
+    #[gpui::test]
+    fn escape_cancels_a_danger_dialog(cx: &mut TestAppContext) {
+        assert_eq!(events_after_in("escape", true, cx), [ModalEvent::Cancelled]);
     }
 }
