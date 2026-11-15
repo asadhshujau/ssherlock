@@ -66,7 +66,7 @@ fn fake_user(
                         None => panic!("unexpected prompt {:?}", prompt.kind()),
                     }
                 }
-                SessionEvent::Banner(_) => {}
+                SessionEvent::Banner(_) | SessionEvent::State(_) => {}
             }
         }
         seen

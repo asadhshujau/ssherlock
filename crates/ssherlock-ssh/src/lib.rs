@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod auth;
+pub mod connection;
 mod error;
 pub mod host_keys;
 pub mod known_hosts;
@@ -11,6 +12,7 @@ pub mod session;
 mod shell;
 
 pub use auth::{AgentSocket, AuthMethod};
+pub use connection::{ConnectionState, RemoteShellConfig, spawn_shell};
 pub use error::SshError;
 pub use host_keys::HostKeys;
 pub use session::{ConnectConfig, Session, SessionEvent};
