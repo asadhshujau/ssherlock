@@ -1,0 +1,11 @@
+# OpenSSH test server. The integration tests build this image and start their own throwaway
+# containers from it. To poke at it by hand: `just ssh-test-server`, then
+# `ssh -p 2222 tester@127.0.0.1` (password `tester-password`).
+services:
+  sshd:
+    image: ssherlock-test-sshd
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "127.0.0.1:2222:22"

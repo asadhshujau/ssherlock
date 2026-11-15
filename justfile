@@ -29,3 +29,13 @@ check: fmt-check lint test deny
 # Build and launch the app
 run *ARGS:
     cargo run -p ssherlock -- {{ARGS}}
+
+# Start the OpenSSH test server on 127.0.0.1:2222 (user `tester`, password `tester-password`)
+ssh-test-server:
+    docker compose --file crates/ssherlock-ssh/tests/docker/compose.yml up --build --detach
+    @echo "ssh -p 2222 tester@127.0.0.1   (password: tester-password)"
+
+# Stop the test server and remove any containers the integration tests left behind
+ssh-test-clean:
+    docker compose --file crates/ssherlock-ssh/tests/docker/compose.yml down
+    docker ps --quiet --filter label=ssherlock-test=1 | xargs -r docker rm --force

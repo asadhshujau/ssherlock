@@ -7,6 +7,14 @@ all-features = true
 # Unmaintained crates are reported only when we depend on them directly; transitive ones
 # are outside our control and show up through the dependency that pulls them in.
 unmaintained = "workspace"
+ignore = [
+    # Marvin attack on `rsa` (via russh). No release of `rsa` fixes it yet; 0.10.0-rc.18 still
+    # says it's affected. The attack needs many timed RSA private-key operations. SSHerlock is
+    # a client and uses an RSA key only to sign one login challenge per connection, never to
+    # decrypt, so a server sees too few operations to time. Ed25519 keys avoid RSA entirely.
+    # Remove once russh depends on a fixed `rsa`.
+    { id = "RUSTSEC-2023-0071", reason = "client signs once per login; no fixed rsa release yet" },
+]
 
 [licenses]
 # Permissive licences only. Add one here only after checking it is compatible with

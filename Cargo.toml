@@ -57,8 +57,20 @@ zeroize = "1.9.1"
 alacritty_terminal = { version = "0.26.0", default-features = false }
 # Local shells in a pseudo-terminal, on Unix and Windows (ConPTY).
 portable-pty = "0.9.0"
+# SSH client: transport, auth, channels, agent client; `russh::keys` re-exports ssh-key.
+russh = "0.65.0"
+# Hashed known_hosts entries are HMAC-SHA1 over the host name (OpenSSH's format).
+hmac = "0.13.0"
+# SHA-1 for that HMAC only; never used for anything new.
+sha1 = "0.11.0"
+# known_hosts salts and hashes are base64.
+base64 = "0.22.1"
+# OsRng for the salt of new hashed known_hosts entries.
+rand = "0.10.0"
 # Readable diffs in test assertions.
 pretty_assertions = "1.4.1"
+# Property tests for parsers (known_hosts, quick connect).
+proptest = "1.6.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
