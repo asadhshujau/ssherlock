@@ -31,6 +31,22 @@
     }
   },
   {
+    "context": "Modal",
+    "bindings": {
+      "enter": "modal::Confirm",
+      "escape": "modal::Cancel"
+    }
+  },
+  {
+    "context": "ContextMenu",
+    "bindings": {
+      "down": "menu::SelectNext",
+      "up": "menu::SelectPrevious",
+      "enter": "menu::ConfirmItem",
+      "escape": "menu::Dismiss"
+    }
+  },
+  {
     "context": "TerminalSearch",
     "bindings": {
       "enter": "terminal::SearchOlder",
