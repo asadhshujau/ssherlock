@@ -194,6 +194,9 @@ impl Render for ContextMenu {
                     div()
                         .id("context-menu")
                         .key_context("ContextMenu")
+                        // Menus open over views that act on mouse-down (a terminal starts a
+                        // selection), which mustn't see clicks meant for an item.
+                        .occlude()
                         .track_focus(&self.focus_handle)
                         .on_action(cx.listener(Self::select_next))
                         .on_action(cx.listener(Self::select_previous))

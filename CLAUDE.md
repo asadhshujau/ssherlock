@@ -168,6 +168,7 @@ Rules that follow from the shape:
 - One `Entity<T>` per stateful view; stateless pieces are plain functions returning `impl IntoElement` or `#[derive(IntoElement)]` components in `ssherlock-ui/src/components/`.
 - Colours, spacing, radii and fonts come from `theme::Theme` tokens via `cx.theme()`. **No literal colours or pixel values in views**; add a token if one is missing.
 - Register actions in each feature's `init(cx)`; bind keys only in `ssherlock-ui/src/keymap/default.json` with `key_context` matching the view.
+- Anything drawn over another view (a dialog, a floating bar, a menu) calls `.occlude()` on its panel. gpui otherwise delivers the click to the view underneath too, and a terminal takes focus on any mouse-down it sees.
 - Subscriptions and observers are stored in `_subscriptions: Vec<Subscription>` on the entity so they live as long as it does.
 - Call `cx.notify()` exactly when state that affects render changed; batch updates, don't notify in loops.
 - Platform differences (Cmd vs Ctrl, Option-as-Meta) are resolved in `ssherlock-ui/src/platform.rs`, nowhere else.

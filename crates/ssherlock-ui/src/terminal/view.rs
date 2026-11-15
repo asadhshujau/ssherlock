@@ -848,6 +848,14 @@ impl TerminalView {
         self.run(|handle, ()| handle.reset(), ());
     }
 
+    /// The search field's focus handle, while the search bar is open.
+    #[cfg(test)]
+    pub(crate) fn search_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        self.search
+            .as_ref()
+            .map(|search| search.input.focus_handle(cx))
+    }
+
     /// Opens the search bar, or focuses it and selects its text if it is already open.
     fn find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = &self.search {
@@ -1195,6 +1203,9 @@ fn search_bar(
 
     div()
         .key_context("TerminalSearch")
+        // It floats over the grid, which takes focus and starts a selection on any mouse-down
+        // it sees.
+        .occlude()
         .absolute()
         .top(theme.spacing.md)
         .right(theme.spacing.xl)
@@ -1210,6 +1221,7 @@ fn search_bar(
         .text_size(theme.text.small_size)
         .child(
             div()
+                .debug_selector(|| "terminal-search-input".into())
                 .w(theme.metrics.search_field_width)
                 .child(input.clone()),
         )

@@ -87,6 +87,8 @@ impl Render for QuickConnectBar {
             .justify_center()
             .child(
                 div()
+                    // It floats over a terminal, which takes focus on any mouse-down it sees.
+                    .occlude()
                     .flex()
                     .flex_col()
                     .gap(theme.spacing.sm)
@@ -99,6 +101,7 @@ impl Render for QuickConnectBar {
                     .text_size(theme.text.ui_size)
                     .child(
                         div()
+                            .debug_selector(|| "quick-connect-input".into())
                             .px(theme.spacing.sm)
                             .py(theme.spacing.xs)
                             .rounded(theme.radius.sm)
