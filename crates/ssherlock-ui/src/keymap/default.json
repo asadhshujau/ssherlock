@@ -2,6 +2,7 @@
   {
     "context": "Terminal",
     "bindings": {
+      "mod-c": "terminal::Copy",
       "mod-v": "terminal::Paste",
       "shift-insert": "terminal::Paste"
     }

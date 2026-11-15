@@ -10,13 +10,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::error::TerminalError;
 use crate::palette::Palette;
 use crate::pty::{PtyInput, PtyIo, PtyOutput};
+use crate::selection::{CellSide, GridPoint, SelectionKind};
 use crate::size::TerminalSize;
 use crate::snapshot::Snapshot;
 use crate::terminal::{Terminal, TerminalConfig, TerminalEvent};
@@ -53,6 +54,10 @@ enum Command {
     Write(Vec<u8>),
     Resize(TerminalSize),
     SetPalette(Palette),
+    StartSelection(SelectionKind, GridPoint, CellSide),
+    ExtendSelection(GridPoint, CellSide),
+    ClearSelection,
+    SelectionText(oneshot::Sender<Option<String>>),
 }
 
 impl TerminalHandle {
@@ -118,6 +123,52 @@ impl TerminalHandle {
     /// As for [`write`](Self::write).
     pub fn set_palette(&self, palette: Palette) -> Result<(), TerminalError> {
         self.send(Command::SetPalette(palette))
+    }
+
+    /// Starts a selection at a visible cell, replacing any existing one.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn start_selection(
+        &self,
+        kind: SelectionKind,
+        at: GridPoint,
+        side: CellSide,
+    ) -> Result<(), TerminalError> {
+        self.send(Command::StartSelection(kind, at, side))
+    }
+
+    /// Moves the free end of the selection to a visible cell.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn extend_selection(&self, to: GridPoint, side: CellSide) -> Result<(), TerminalError> {
+        self.send(Command::ExtendSelection(to, side))
+    }
+
+    /// Removes the selection.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write).
+    pub fn clear_selection(&self) -> Result<(), TerminalError> {
+        self.send(Command::ClearSelection)
+    }
+
+    /// The selected text, read by the terminal's task. Resolves to `None` when nothing is
+    /// selected or the task has stopped.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write`](Self::write), if the request can't be queued.
+    pub fn selection_text(
+        &self,
+    ) -> Result<impl Future<Output = Option<String>> + Send + 'static, TerminalError> {
+        let (reply, answer) = oneshot::channel();
+        self.send(Command::SelectionText(reply))?;
+        Ok(async move { answer.await.ok().flatten() })
     }
 
     /// The most recent snapshot.
@@ -211,6 +262,23 @@ impl Task {
             Command::SetPalette(palette) => {
                 self.terminal.set_palette(palette);
                 self.is_dirty = true;
+            }
+            Command::StartSelection(kind, at, side) => {
+                self.terminal.start_selection(kind, at, side);
+                self.is_dirty = true;
+            }
+            Command::ExtendSelection(to, side) => {
+                self.terminal.extend_selection(to, side);
+                self.is_dirty = true;
+            }
+            Command::ClearSelection => {
+                self.terminal.clear_selection();
+                self.is_dirty = true;
+            }
+            Command::SelectionText(reply) => {
+                if reply.send(self.terminal.selection_text()).is_err() {
+                    tracing::debug!("selection text requested and then abandoned");
+                }
             }
         }
     }
@@ -524,6 +592,38 @@ mod tests {
         within(rx.wait_for(|s| s.background == crate::palette::Rgb::new(1, 2, 3)))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn selections_are_drawn_and_copied() {
+        let (handle, _events, peer) = start(TerminalSize::new(20, 4));
+        peer.output
+            .send(PtyOutput::Data(b"hello world".to_vec()))
+            .await
+            .unwrap();
+        wait_for_row(&handle, "hello world").await;
+
+        handle
+            .start_selection(SelectionKind::Word, GridPoint::new(0, 7), CellSide::Left)
+            .unwrap();
+        let mut rx = handle.subscribe();
+        within(rx.wait_for(|s| s.selection.is_some()))
+            .await
+            .unwrap();
+        let text = within(handle.selection_text().unwrap()).await;
+        assert_eq!(text.as_deref(), Some("world"));
+
+        handle
+            .extend_selection(GridPoint::new(0, 0), CellSide::Left)
+            .unwrap();
+        let text = within(handle.selection_text().unwrap()).await;
+        assert_eq!(text.as_deref(), Some("hello world"));
+
+        handle.clear_selection().unwrap();
+        within(rx.wait_for(|s| s.selection.is_none()))
+            .await
+            .unwrap();
+        assert_eq!(within(handle.selection_text().unwrap()).await, None);
     }
 
     #[test]

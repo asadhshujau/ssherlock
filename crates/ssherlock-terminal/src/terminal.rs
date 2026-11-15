@@ -9,13 +9,16 @@ use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::{self, Colors};
-use alacritty_terminal::term::{Config, Osc52, Term, point_to_viewport};
+use alacritty_terminal::term::{Config, Osc52, Term, point_to_viewport, viewport_to_point};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape as VteCursorShape, NamedColor};
 
 use crate::palette::{Palette, Rgb};
 use crate::pty::PtyExit;
+use crate::selection::{CellSide, GridPoint, SelectionKind, VisibleSelection};
 use crate::size::TerminalSize;
 use crate::snapshot::{CellStyle, Cursor, CursorShape, Snapshot, SnapshotCell, TerminalModes};
 
@@ -194,7 +197,96 @@ impl Terminal {
             modes: TerminalModes(content.mode),
             background: colors.lookup(NamedColor::Background as usize),
             cursor_color: colors.lookup(NamedColor::Cursor as usize),
+            selection: content
+                .selection
+                .and_then(|range| self.visible_selection(range, display_offset)),
         }
+    }
+
+    /// Starts a new selection at a visible cell, replacing any existing one.
+    pub fn start_selection(&mut self, kind: SelectionKind, at: GridPoint, side: CellSide) {
+        let kind = match kind {
+            SelectionKind::Simple => SelectionType::Simple,
+            SelectionKind::Word => SelectionType::Semantic,
+            SelectionKind::Line => SelectionType::Lines,
+            SelectionKind::Block => SelectionType::Block,
+        };
+        self.term.selection = Some(Selection::new(kind, self.grid_point(at), side_of(side)));
+    }
+
+    /// Moves the free end of the selection to a visible cell. Does nothing without a selection.
+    pub fn extend_selection(&mut self, to: GridPoint, side: CellSide) {
+        let point = self.grid_point(to);
+        if let Some(selection) = self.term.selection.as_mut() {
+            selection.update(point, side_of(side));
+        }
+    }
+
+    /// Removes the selection.
+    pub fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    /// The selected text, or `None` if nothing is selected. Lines that the terminal wrapped are
+    /// joined; lines the program ended are separated by `\n`.
+    pub fn selection_text(&self) -> Option<String> {
+        self.term
+            .selection_to_string()
+            .filter(|text| !text.is_empty())
+    }
+
+    /// A visible cell as a point in the emulator's grid, clamped onto the screen.
+    fn grid_point(&self, at: GridPoint) -> Point {
+        let row = at.row.min(self.term.screen_lines().saturating_sub(1));
+        let column = at.column.min(self.term.columns().saturating_sub(1));
+        viewport_to_point(
+            self.term.grid().display_offset(),
+            Point::new(row, Column(column)),
+        )
+    }
+
+    /// The part of `range` on the visible screen.
+    fn visible_selection(
+        &self,
+        range: SelectionRange,
+        display_offset: usize,
+    ) -> Option<VisibleSelection> {
+        let rows = self.term.screen_lines();
+        let last_column = self.term.columns().saturating_sub(1);
+        let offset = i64::try_from(display_offset).ok()?;
+        let to_row = |line: i32| i64::from(line) + offset;
+        let (start_row, end_row) = (to_row(range.start.line.0), to_row(range.end.line.0));
+        let last_row = i64::try_from(rows).ok()? - 1;
+        if end_row < 0 || start_row > last_row {
+            return None;
+        }
+        // Rows cut off above or below the screen continue from the first column or to the
+        // last, except in a block selection, which keeps its columns.
+        let start = if start_row < 0 {
+            let column = if range.is_block {
+                range.start.column.0
+            } else {
+                0
+            };
+            GridPoint::new(0, column)
+        } else {
+            GridPoint::new(usize::try_from(start_row).ok()?, range.start.column.0)
+        };
+        let end = if end_row > last_row {
+            let column = if range.is_block {
+                range.end.column.0
+            } else {
+                last_column
+            };
+            GridPoint::new(usize::try_from(last_row).ok()?, column)
+        } else {
+            GridPoint::new(usize::try_from(end_row).ok()?, range.end.column.0)
+        };
+        Some(VisibleSelection {
+            start,
+            end,
+            is_block: range.is_block,
+        })
     }
 
     /// Turns an emulator event into one for our owner, answering colour and size queries on the
@@ -243,6 +335,13 @@ impl Terminal {
             | Event::Exit
             | Event::ChildExit(_) => None,
         }
+    }
+}
+
+fn side_of(side: CellSide) -> Side {
+    match side {
+        CellSide::Left => Side::Left,
+        CellSide::Right => Side::Right,
     }
 }
 
@@ -709,6 +808,151 @@ mod tests {
             assert_eq!(term.drain_events(), [], "{name}");
             assert_eq!(term.take_reply(), b"", "{name}");
         }
+    }
+
+    fn select(
+        term: &mut Terminal,
+        kind: SelectionKind,
+        from: (usize, usize, CellSide),
+        to: (usize, usize, CellSide),
+    ) {
+        term.start_selection(kind, GridPoint::new(from.0, from.1), from.2);
+        term.extend_selection(GridPoint::new(to.0, to.1), to.2);
+    }
+
+    #[test]
+    fn selection_kinds_select_the_expected_text() {
+        use CellSide::{Left, Right};
+        let screen = b"ls -la /usr/local\r\nsecond line here\r\nthird";
+        let cases = [
+            (
+                "simple",
+                SelectionKind::Simple,
+                (0, 3, Left),
+                (0, 5, Right),
+                Some("-la"),
+            ),
+            (
+                "simple across lines",
+                SelectionKind::Simple,
+                (0, 7, Left),
+                (1, 5, Right),
+                Some("/usr/local\nsecond"),
+            ),
+            (
+                "backwards",
+                SelectionKind::Simple,
+                (0, 5, Right),
+                (0, 3, Left),
+                Some("-la"),
+            ),
+            (
+                "word is a path",
+                SelectionKind::Word,
+                (0, 10, Left),
+                (0, 10, Left),
+                Some("/usr/local"),
+            ),
+            (
+                "line",
+                SelectionKind::Line,
+                (1, 3, Left),
+                (1, 3, Left),
+                Some("second line here\n"),
+            ),
+            (
+                "block",
+                SelectionKind::Block,
+                (0, 0, Left),
+                (2, 1, Right),
+                Some("ls\nse\nth"),
+            ),
+            (
+                "a click selects nothing",
+                SelectionKind::Simple,
+                (0, 2, Left),
+                (0, 2, Left),
+                None,
+            ),
+        ];
+        for (name, kind, from, to, expected) in cases {
+            let mut term = terminal(20, 4);
+            term.feed(screen);
+            select(&mut term, kind, from, to);
+            assert_eq!(term.selection_text().as_deref(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn wrapped_lines_copy_as_one() {
+        let mut term = terminal(5, 4);
+        term.feed(b"abcdefgh\r\nxy");
+        select(
+            &mut term,
+            SelectionKind::Line,
+            (0, 0, CellSide::Left),
+            (1, 0, CellSide::Left),
+        );
+        assert_eq!(term.selection_text().as_deref(), Some("abcdefgh\n"));
+    }
+
+    #[test]
+    fn snapshot_shows_the_visible_part_of_the_selection() {
+        let mut term = terminal(10, 3);
+        term.feed(b"one\r\ntwo\r\nthree");
+        assert_eq!(term.snapshot().selection, None);
+
+        select(
+            &mut term,
+            SelectionKind::Simple,
+            (0, 1, CellSide::Left),
+            (1, 1, CellSide::Right),
+        );
+        assert_eq!(
+            term.snapshot().selection,
+            Some(VisibleSelection {
+                start: GridPoint::new(0, 1),
+                end: GridPoint::new(1, 1),
+                is_block: false,
+            })
+        );
+
+        // Output scrolls the selection up with its text; the part above the screen is cut off.
+        term.feed(b"\r\nfour");
+        assert_eq!(
+            term.snapshot().selection,
+            Some(VisibleSelection {
+                start: GridPoint::new(0, 0),
+                end: GridPoint::new(0, 1),
+                is_block: false,
+            })
+        );
+        assert_eq!(term.selection_text().as_deref(), Some("ne\ntw"));
+
+        // Scrolled entirely off the screen: nothing to draw, but still copyable.
+        term.feed(b"\r\nfive\r\nsix");
+        assert_eq!(term.snapshot().selection, None);
+        assert_eq!(term.selection_text().as_deref(), Some("ne\ntw"));
+
+        term.clear_selection();
+        assert_eq!(term.selection_text(), None);
+    }
+
+    #[test]
+    fn selection_points_are_clamped_to_the_screen() {
+        let mut term = terminal(5, 2);
+        term.feed(b"abc");
+        select(
+            &mut term,
+            SelectionKind::Simple,
+            (9, 9, CellSide::Left),
+            (0, 0, CellSide::Left),
+        );
+        assert_eq!(term.selection_text().as_deref(), Some("abc"));
+        // Extending without a selection is ignored.
+        term.clear_selection();
+        term.extend_selection(GridPoint::new(0, 1), CellSide::Right);
+        assert_eq!(term.selection_text(), None);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! Every difference between macOS, Linux and Windows that the UI cares about, in one place
-//! (CLAUDE.md §7): which modifier app shortcuts use, what Alt/Option does in a terminal, and
-//! which monospace fonts to look for.
+//! (CLAUDE.md §7): which modifier app shortcuts use, what Alt/Option does in a terminal, which
+//! monospace fonts to look for and whether there is a primary selection.
+
+use gpui::{App, ClipboardItem};
 
 /// Monospace font families to try for terminals, most preferred first.
 #[cfg(target_os = "macos")]
@@ -40,6 +42,36 @@ pub const ALT_KEY: AltKey = AltKey::Compose;
 /// What Alt does in a terminal on this platform.
 #[cfg(not(target_os = "macos"))]
 pub const ALT_KEY: AltKey = AltKey::Meta;
+
+/// Whether the platform has a primary selection: selecting text copies it there and the middle
+/// button pastes it. X11 and Wayland have one; macOS and Windows don't. Matches the targets on
+/// which gpui offers `write_to_primary` / `read_from_primary`.
+pub const HAS_PRIMARY_SELECTION: bool = cfg!(any(target_os = "linux", target_os = "freebsd"));
+
+/// Puts `item` on the primary selection.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub fn write_to_primary(item: ClipboardItem, cx: &mut App) {
+    cx.write_to_primary(item);
+}
+
+/// Puts `item` on the primary selection. There is none on this platform, so it does nothing.
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+pub fn write_to_primary(item: ClipboardItem, cx: &mut App) {
+    let _ = (item, cx);
+}
+
+/// Reads the primary selection.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub fn read_from_primary(cx: &App) -> Option<ClipboardItem> {
+    cx.read_from_primary()
+}
+
+/// Reads the primary selection. There is none on this platform, so it is always empty.
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+pub fn read_from_primary(cx: &App) -> Option<ClipboardItem> {
+    let _ = cx;
+    None
+}
 
 /// The modifiers that `mod-` stands for in `keymap/default.json`.
 ///
