@@ -9,7 +9,23 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+base64 = { workspace = true }
+hmac = { workspace = true }
+rand = { workspace = true }
+russh = { workspace = true }
+secrecy = { workspace = true }
+sha1 = { workspace = true }
 ssherlock-core = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "fs"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time", "net", "io-util", "fs"] }
 
 [lints]
 workspace = true

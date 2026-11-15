@@ -81,7 +81,15 @@ Wayland sessions are supported.
 
 The SSH integration tests run against an OpenSSH server in Docker (`crates/ssherlock-ssh/tests/docker/`).
 Install Docker Engine or Docker Desktop (macOS) or Podman with Docker compatibility. If Docker is
-missing, those tests are skipped with a message.
+missing, those tests are skipped with a message. On Linux, add yourself to the `docker` group
+(`sudo usermod -aG docker $USER`, then log in again) so the tests can reach the daemon without
+`sudo`.
+
+Each test starts its own container on a random localhost port and removes it afterwards. To try
+the server by hand, `just ssh-test-server` starts one on `127.0.0.1:2222` (user `tester`,
+password `tester-password`). `just ssh-test-clean` stops it and removes any containers a test
+left behind. The keys in `crates/ssherlock-ssh/tests/fixtures/` were generated for these tests
+only.
 
 ### 5. Build and check
 

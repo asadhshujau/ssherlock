@@ -1,0 +1,18 @@
+# sshd for tests: every auth method SSHerlock supports, one user, verbose logs.
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+AllowUsers tester
+PermitRootLogin no
+PubkeyAuthentication yes
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+UsePAM yes
+
+AllowTcpForwarding yes
+AllowAgentForwarding yes
+Subsystem sftp internal-sftp
+
+LogLevel VERBOSE
