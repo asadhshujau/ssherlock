@@ -15,34 +15,38 @@ use alacritty_terminal::term::{Config, Osc52, Term, point_to_viewport};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape as VteCursorShape, NamedColor};
 
 use crate::palette::{Palette, Rgb};
+use crate::pty::PtyExit;
 use crate::size::TerminalSize;
 use crate::snapshot::{CellStyle, Cursor, CursorShape, Snapshot, SnapshotCell, TerminalModes};
 
-/// Settings fixed when a terminal is created.
+/// How to set up a new terminal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalConfig {
-    /// Lines kept above the screen once they scroll off the top.
+    /// Lines kept above the screen once they scroll off the top. Fixed for the terminal's life.
     pub scrollback_lines: usize,
+    /// Colours to start with; [`Terminal::set_palette`] changes them later.
+    pub palette: Palette,
 }
 
 impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             scrollback_lines: 10_000,
+            palette: Palette::default(),
         }
     }
 }
 
-/// Something the terminal's owner has to act on after feeding it bytes.
+/// Something the UI may want to show about a terminal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalEvent {
-    /// Bytes to send back to the program: answers to queries such as cursor position (`DSR`),
-    /// device attributes (`DA`) or colours (`OSC 11`).
-    Reply(Vec<u8>),
     /// The program set the title (`OSC 0/2`), or reset it to the default (`None`).
     TitleChanged(Option<String>),
     /// The program rang the bell (`BEL`).
     Bell,
+    /// The program exited. Sent by [`TerminalHandle`](crate::TerminalHandle), which watches
+    /// the pty; a bare [`Terminal`] never produces it.
+    Exited(PtyExit),
 }
 
 /// A terminal emulator for one program.
@@ -50,12 +54,14 @@ pub struct Terminal {
     term: Term<EventQueue>,
     parser: ansi::Processor,
     events: mpsc::Receiver<Event>,
+    pending_events: Vec<TerminalEvent>,
+    pending_reply: Vec<u8>,
     size: TerminalSize,
     palette: Palette,
 }
 
 impl Terminal {
-    /// An empty terminal of `size` with the default palette.
+    /// An empty terminal of `size`.
     pub fn new(config: &TerminalConfig, size: TerminalSize) -> Self {
         let (sender, events) = mpsc::channel();
         let term_config = Config {
@@ -68,28 +74,44 @@ impl Terminal {
             term: Term::new(term_config, &GridSize(size), EventQueue(sender)),
             parser: ansi::Processor::new(),
             events,
+            pending_events: Vec::new(),
+            pending_reply: Vec::new(),
             size,
-            palette: Palette::default(),
+            palette: config.palette.clone(),
         }
     }
 
     /// Processes output from the program.
     ///
-    /// Call [`drain_events`](Self::drain_events) afterwards to collect replies, title changes
-    /// and bells.
+    /// Afterwards, send [`take_reply`](Self::take_reply) back to the program and show
+    /// [`drain_events`](Self::drain_events) to the user.
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
     }
 
     /// Takes the events produced since the last call.
     pub fn drain_events(&mut self) -> Vec<TerminalEvent> {
-        let mut out = Vec::new();
+        self.collect();
+        std::mem::take(&mut self.pending_events)
+    }
+
+    /// Takes the bytes to send back to the program since the last call: answers to queries
+    /// such as cursor position (`DSR`), device attributes (`DA`) or colours (`OSC 11`). Empty
+    /// when there is nothing to send.
+    pub fn take_reply(&mut self) -> Vec<u8> {
+        self.collect();
+        std::mem::take(&mut self.pending_reply)
+    }
+
+    /// Sorts the emulator's queued events into replies and events for the UI.
+    fn collect(&mut self) {
         while let Ok(event) = self.events.try_recv() {
-            if let Some(event) = self.translate(event) {
-                out.push(event);
+            match self.translate(event) {
+                Some(Effect::Reply(bytes)) => self.pending_reply.extend_from_slice(&bytes),
+                Some(Effect::Event(event)) => self.pending_events.push(event),
+                None => {}
             }
         }
-        out
     }
 
     /// When a synchronized update (`?2026`) times out, if one is in progress.
@@ -177,14 +199,16 @@ impl Terminal {
 
     /// Turns an emulator event into one for our owner, answering colour and size queries on the
     /// way. Events the owner doesn't need return `None`.
-    fn translate(&self, event: Event) -> Option<TerminalEvent> {
+    fn translate(&self, event: Event) -> Option<Effect> {
         match event {
-            Event::PtyWrite(text) => Some(TerminalEvent::Reply(text.into_bytes())),
+            Event::PtyWrite(text) => Some(Effect::Reply(text.into_bytes())),
             // Programs clear the title with an empty `OSC 2`; treat that as a reset.
-            Event::Title(title) if title.is_empty() => Some(TerminalEvent::TitleChanged(None)),
-            Event::Title(title) => Some(TerminalEvent::TitleChanged(Some(title))),
-            Event::ResetTitle => Some(TerminalEvent::TitleChanged(None)),
-            Event::Bell => Some(TerminalEvent::Bell),
+            Event::Title(title) if title.is_empty() => {
+                Some(Effect::Event(TerminalEvent::TitleChanged(None)))
+            }
+            Event::Title(title) => Some(Effect::Event(TerminalEvent::TitleChanged(Some(title)))),
+            Event::ResetTitle => Some(Effect::Event(TerminalEvent::TitleChanged(None))),
+            Event::Bell => Some(Effect::Event(TerminalEvent::Bell)),
             Event::ColorRequest(index, format) => {
                 let colors = Resolver {
                     palette: &self.palette,
@@ -196,7 +220,7 @@ impl Terminal {
                     g: rgb.g,
                     b: rgb.b,
                 });
-                Some(TerminalEvent::Reply(reply.into_bytes()))
+                Some(Effect::Reply(reply.into_bytes()))
             }
             Event::TextAreaSizeRequest(format) => {
                 let size = self.size;
@@ -206,7 +230,7 @@ impl Terminal {
                     cell_width: size.cell_width(),
                     cell_height: size.cell_height(),
                 });
-                Some(TerminalEvent::Reply(reply.into_bytes()))
+                Some(Effect::Reply(reply.into_bytes()))
             }
             // OSC 52 is disabled in `new`, so the clipboard events never arrive. Redraws are
             // driven by snapshots and the pty reports exit itself; the rest are cursor-shape
@@ -220,6 +244,12 @@ impl Terminal {
             | Event::ChildExit(_) => None,
         }
     }
+}
+
+/// What one emulator event asks of the terminal's owner.
+enum Effect {
+    Reply(Vec<u8>),
+    Event(TerminalEvent),
 }
 
 /// Collects emulator events so [`Terminal::drain_events`] can hand them out after a feed.
@@ -557,6 +587,7 @@ mod tests {
     fn scrollback_is_limited_by_config() {
         let config = TerminalConfig {
             scrollback_lines: 5,
+            ..TerminalConfig::default()
         };
         let mut term = Terminal::new(&config, TerminalSize::new(10, 3));
         for i in 0..50 {
@@ -674,12 +705,24 @@ mod tests {
             let mut term = Terminal::new(&TerminalConfig::default(), size);
             term.set_palette(palette.clone());
             term.feed(query);
-            assert_eq!(
-                term.drain_events(),
-                [TerminalEvent::Reply(reply.to_vec())],
-                "{name}"
-            );
+            assert_eq!(term.take_reply(), reply, "{name}");
+            assert_eq!(term.drain_events(), [], "{name}");
+            assert_eq!(term.take_reply(), b"", "{name}");
         }
+    }
+
+    #[test]
+    fn replies_and_events_are_kept_apart() {
+        let mut term = terminal(10, 2);
+        term.feed(b"\x07\x1b[6n\x1b]0;t\x07\x1b[6n");
+        assert_eq!(term.take_reply(), b"\x1b[1;1R\x1b[1;1R");
+        assert_eq!(
+            term.drain_events(),
+            [
+                TerminalEvent::Bell,
+                TerminalEvent::TitleChanged(Some("t".into()))
+            ]
+        );
     }
 
     #[test]
@@ -688,6 +731,7 @@ mod tests {
         // "aGk=" is base64 for "hi".
         term.feed(b"\x1b]52;c;aGk=\x07\x1b]52;c;?\x07");
         assert_eq!(term.drain_events(), []);
+        assert_eq!(term.take_reply(), b"");
     }
 
     #[test]

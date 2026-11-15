@@ -134,7 +134,7 @@ Work:
 - `KnownHosts` store: read/write OpenSSH format, hashed hosts supported.
 - Keep-alive, timeout, reconnect with backoff; `ConnectionState` enum emitted to UI.
 - Quick connect bar parsing `user@host:port` and `ssh://`.
-- Terminal tab bound to an SSH channel instead of a pty (same `Terminal` type — the byte source is a trait).
+- Terminal tab bound to an SSH channel instead of a pty (same `TerminalHandle` — the SSH channel is bridged to a `PtyIo` channel pair, see ADR 0005).
 - Integration tests against a dockerised OpenSSH server (`tests/docker/`), run in CI.
 
 Exit: connect by password, key and agent to a test server; wrong fingerprint is refused; dropping the network reconnects.

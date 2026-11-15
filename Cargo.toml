@@ -55,6 +55,8 @@ secrecy = "0.10.3"
 zeroize = "1.9.1"
 # VT parser, grid, scrollback, selection and search for the terminal (same choice as Zed).
 alacritty_terminal = { version = "0.26.0", default-features = false }
+# Local shells in a pseudo-terminal, on Unix and Windows (ConPTY).
+portable-pty = "0.9.0"
 # Readable diffs in test assertions.
 pretty_assertions = "1.4.1"
 
