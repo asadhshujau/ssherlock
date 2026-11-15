@@ -3,7 +3,6 @@
 //! monospace fonts to look for and whether there is a primary selection.
 
 use gpui::{App, ClipboardItem};
-
 use serde::Deserialize;
 
 /// An operating system, for keymap sections that apply to only some (`"os": ["macos"]`).
