@@ -7,7 +7,7 @@ use gpui::{
 };
 use ssherlock_core::app;
 
-use crate::terminal::TerminalView;
+use crate::tabs::Pane;
 use crate::theme::{ActiveTheme, Appearance, Theme};
 use crate::window_frame::window_frame;
 
@@ -19,10 +19,9 @@ const DEFAULT_HEIGHT: f32 = 720.;
 const MIN_WIDTH: f32 = 480.;
 const MIN_HEIGHT: f32 = 320.;
 
-/// Root view of the main window. For now it shows one local terminal; tabs and the host list
-/// come next.
+/// Root view of the main window: a pane of terminal tabs. The host list joins it in Phase 3.
 pub struct MainWindow {
-    terminal: Entity<TerminalView>,
+    pane: Entity<Pane>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -35,11 +34,16 @@ impl MainWindow {
             )));
             cx.notify();
         });
-        let terminal = cx.new(|cx| TerminalView::local(window, cx));
-        terminal.focus_handle(cx).focus(window);
+        let pane = cx.new(|cx| Pane::new(window, cx));
+        pane.focus_handle(cx).focus(window);
+        // The window title follows the active tab.
+        let title = cx.observe_in(&pane, window, |_, pane, window, cx| {
+            let title = window_title(&pane.read(cx).title(cx));
+            window.set_window_title(&title);
+        });
         Self {
-            terminal,
-            _subscriptions: vec![appearance],
+            pane,
+            _subscriptions: vec![appearance, title],
         }
     }
 }
@@ -52,10 +56,16 @@ impl Render for MainWindow {
             .flex_1()
             .min_h_0()
             .bg(theme.colors.background)
-            .child(self.terminal.clone());
+            .child(self.pane.clone());
 
-        window_frame(window, &theme, content)
+        let title = window_title(&self.pane.read(cx).title(cx));
+        window_frame(window, &theme, title.into(), content)
     }
+}
+
+/// "`tab title` — SSHerlock".
+fn window_title(tab: &str) -> String {
+    format!("{tab} \u{2014} {}", app::NAME)
 }
 
 /// Opens the main window.

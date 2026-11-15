@@ -4,10 +4,12 @@
 //! live in `ssherlock-core` and I/O lives in the service and store crates.
 #![forbid(unsafe_code)]
 
+pub mod components;
 pub mod keymap;
 pub mod main_window;
 pub mod platform;
 pub mod runtime;
+pub mod tabs;
 pub mod terminal;
 pub mod theme;
 mod window_frame;
@@ -26,6 +28,7 @@ pub fn init(tokio: tokio::runtime::Handle, cx: &mut App) {
         cx.window_appearance(),
     )));
     terminal::init(cx);
+    tabs::init(cx);
     // Last, so every feature's actions exist when their bindings are built.
     keymap::init(cx);
 
