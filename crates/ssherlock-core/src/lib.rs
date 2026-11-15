@@ -8,9 +8,13 @@
 //! thing that failed. Nothing here wraps another workspace crate's error.
 #![forbid(unsafe_code)]
 
+pub mod address;
 pub mod app;
 pub mod id;
+pub mod quick_connect;
 pub mod secret;
 
+pub use address::{Address, AddressError};
 pub use id::{Id, IdError};
+pub use quick_connect::{ConnectTarget, QuickConnectError};
 pub use secret::{ExposeSecret, SecretBox, SecretString};

@@ -6413,6 +6413,7 @@ name = "ssherlock-core"
 version = "0.0.1"
 dependencies = [
  "pretty_assertions",
+ "proptest",
  "secrecy",
  "serde",
  "serde_json",
