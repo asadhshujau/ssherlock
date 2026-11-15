@@ -454,7 +454,7 @@ impl TerminalView {
             let item = ClipboardItem::new_string(text);
             let written = cx.update(|cx| match clipboard {
                 Clipboard::Main => cx.write_to_clipboard(item),
-                Clipboard::Primary => cx.write_to_primary(item),
+                Clipboard::Primary => platform::write_to_primary(item, cx),
             });
             if written.is_err() {
                 tracing::debug!("app closed before the selection was copied");
@@ -612,7 +612,7 @@ impl TerminalView {
         match event.button {
             MouseButton::Left => self.start_selection(event, cx),
             MouseButton::Middle if platform::HAS_PRIMARY_SELECTION => {
-                if let Some(text) = cx.read_from_primary().and_then(|item| item.text()) {
+                if let Some(text) = platform::read_from_primary(cx).and_then(|item| item.text()) {
                     self.paste_text(text, window, cx);
                 }
                 cx.stop_propagation();
