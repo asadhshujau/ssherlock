@@ -27,7 +27,8 @@ type DetailBuilder = Box<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 pub enum ModalEvent {
     /// The confirm button or Enter.
     Confirmed,
-    /// The cancel button, Escape, or a click outside the dialog.
+    /// The cancel button or Escape. A click outside the dialog does nothing: cancelling can
+    /// mean rejecting a host key or abandoning a login, which a stray click shouldn't do.
     Cancelled,
 }
 
@@ -106,9 +107,9 @@ impl Render for Modal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let detail = self.detail.as_ref().map(|detail| detail(window, cx));
-        // The focused root carries the key context. Clicking outside the panel cancels, through
-        // a separate backdrop: gpui turns Enter on a *focused* element with `on_click` into a
-        // click, so a focused backdrop would cancel the dialog on the very Enter that opened it.
+        // The focused root carries the key context. The backdrop only dims and swallows clicks,
+        // so nothing behind the dialog reacts while it's open, and a click outside it is
+        // ignored rather than cancelling.
         div()
             .key_context("Modal")
             .track_focus(&self.focus_handle)
@@ -125,11 +126,14 @@ impl Render for Modal {
                     .absolute()
                     .inset_0()
                     .bg(theme.colors.modal_scrim)
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ModalEvent::Cancelled))),
+                    .occlude(),
             )
             .child(
                 div()
                     .id("modal")
+                    // Without this the backdrop underneath still counts as hovered, so a click
+                    // on the panel (a label, the padding, a text field) reached it too.
+                    .occlude()
                     .flex()
                     .flex_col()
                     .gap(theme.spacing.lg)
@@ -184,7 +188,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use gpui::TestAppContext;
+    use gpui::{AppContext as _, TestAppContext};
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -239,6 +243,61 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(seen.take(), Vec::<ModalEvent>::new());
+    }
+
+    /// Fills the window and shows the dialog over it, as a view that owns one does. The dialog
+    /// is positioned against its parent, so as a window's root it wouldn't cover the window.
+    struct Host {
+        modal: gpui::Entity<Modal>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().relative().child(self.modal.clone())
+        }
+    }
+
+    /// Opens a dialog, clicks at the point `at` picks from the window size, and returns the
+    /// events.
+    fn events_after_click(
+        at: impl FnOnce(gpui::Size<gpui::Pixels>) -> gpui::Point<gpui::Pixels>,
+        cx: &mut TestAppContext,
+    ) -> Vec<ModalEvent> {
+        cx.update(crate::keymap::init);
+        let (host, cx) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| Modal::new("Title", "Message", "OK", window, cx)),
+        });
+        let modal = cx.update(|_, cx| host.read(cx).modal.clone());
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        let _subscription = cx.update(|_, cx| {
+            cx.subscribe(&modal, move |_, event: &ModalEvent, _| {
+                sink.borrow_mut().push(*event);
+            })
+        });
+        cx.run_until_parked();
+        let position = at(cx.update(|window, _| window.viewport_size()));
+        cx.simulate_mouse_move(position, None, gpui::Modifiers::none());
+        cx.simulate_click(position, gpui::Modifiers::none());
+        cx.run_until_parked();
+        seen.take()
+    }
+
+    /// Regression: the panel didn't block the mouse, so a click anywhere on it reached the
+    /// backdrop and cancelled — the login dialog vanished when its field was clicked.
+    #[gpui::test]
+    fn a_click_on_the_panel_does_nothing(cx: &mut TestAppContext) {
+        let centre =
+            |size: gpui::Size<gpui::Pixels>| gpui::point(size.width / 2., size.height / 2.);
+        assert_eq!(events_after_click(centre, cx), Vec::<ModalEvent>::new());
+    }
+
+    /// Regression: a click on the backdrop cancelled, so a stray click outside the login
+    /// dialog abandoned the login, and outside the host key dialog rejected the key.
+    #[gpui::test]
+    fn a_click_outside_the_panel_does_nothing(cx: &mut TestAppContext) {
+        let corner = |_| gpui::point(gpui::px(2.), gpui::px(2.));
+        assert_eq!(events_after_click(corner, cx), Vec::<ModalEvent>::new());
     }
 
     #[gpui::test]
