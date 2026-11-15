@@ -16,6 +16,7 @@ use tracing::Instrument as _;
 
 use crate::SshError;
 use crate::auth::{AuthMethod, AuthPrompt, Authenticator};
+use crate::connection::ConnectionState;
 use crate::host_keys::HostKeys;
 use crate::known_hosts::{HostKeyStatus, KnownHostName, KnownKey};
 
@@ -90,6 +91,8 @@ pub enum SessionEvent {
     Prompt(AuthPrompt),
     /// The server's pre-login banner (`/etc/issue.net` and the like), to show the user.
     Banner(String),
+    /// Progress of a [`spawn_shell`](crate::connection::spawn_shell) connection.
+    State(ConnectionState),
 }
 
 /// A question to the user about a host key that isn't trusted yet. Answer it with
@@ -227,6 +230,26 @@ impl Session {
             events: &self.events,
         };
         authenticator.run(methods).instrument(span).await
+    }
+
+    /// Asks the server for a reply and returns the round-trip time.
+    ///
+    /// Uses OpenSSH's `keepalive@openssh.com` request: servers refuse it, and the refusal is the
+    /// reply being timed.
+    ///
+    /// # Errors
+    ///
+    /// [`SshError::Protocol`] if the connection is gone.
+    pub async fn ping(&self) -> Result<Duration, SshError> {
+        let started = Instant::now();
+        match self
+            .handle
+            .send_global_request("keepalive@openssh.com", &[], true)
+            .await
+        {
+            Ok(_) | Err(russh::Error::RequestDenied) => Ok(started.elapsed()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub(crate) fn handle(&self) -> &client::Handle<ClientHandler> {

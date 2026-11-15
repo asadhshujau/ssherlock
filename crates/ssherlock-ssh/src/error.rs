@@ -122,3 +122,17 @@ pub enum SshError {
     #[error("the server closed the channel")]
     ChannelClosed,
 }
+
+impl SshError {
+    /// Whether trying again later might work: network trouble, as opposed to a refused login, a
+    /// rejected host key or a cancelled prompt, which would fail the same way again.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Connect { .. }
+                | Self::ConnectTimeout { .. }
+                | Self::Protocol(_)
+                | Self::ChannelClosed
+        )
+    }
+}

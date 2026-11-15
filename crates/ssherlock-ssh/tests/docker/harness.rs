@@ -101,6 +101,18 @@ impl TestServer {
         stdout_of(&out, "docker exec cat").trim().to_owned()
     }
 
+    /// Freezes the server's processes, so its TCP connections go silent as on a dropped network.
+    pub fn pause(&self) {
+        let out = docker(&["pause", &self.id]);
+        stdout_of(&out, "docker pause");
+    }
+
+    /// Undoes [`TestServer::pause`].
+    pub fn unpause(&self) {
+        let out = docker(&["unpause", &self.id]);
+        stdout_of(&out, "docker unpause");
+    }
+
     /// Polls until sshd has sent its `SSH-2.0-` banner.
     fn wait_for_banner(&self) {
         let deadline = Instant::now() + READY_TIMEOUT;
