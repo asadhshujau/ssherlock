@@ -7,11 +7,13 @@
 //! - [`Terminal`] is the emulator itself: pure, synchronous, no I/O.
 //! - [`pty`] connects it to a program: [`spawn_local`] starts a local shell, and [`PtyIo`] is
 //!   the channel pair any other byte source (an SSH channel) provides.
+//! - [`input`] encodes keys, paste, focus and mouse as the bytes programs expect.
 //! - [`TerminalHandle`] runs a `Terminal` against a `PtyIo` on Tokio; this is what the UI holds.
 #![forbid(unsafe_code)]
 
 pub mod error;
 pub mod handle;
+pub mod input;
 pub mod palette;
 pub mod pty;
 pub mod size;
@@ -20,6 +22,10 @@ pub mod terminal;
 
 pub use error::TerminalError;
 pub use handle::TerminalHandle;
+pub use input::{
+    Key, Modifiers, MouseAction, MouseButton, MouseInput, encode_alternate_scroll, encode_focus,
+    encode_key, encode_mouse, encode_paste, is_multiline,
+};
 pub use palette::{Palette, Rgb};
 pub use pty::{
     PtyExit, PtyInput, PtyIo, PtyOutput, PtyPeer, ShellConfig, ShellProgram, spawn_local,
