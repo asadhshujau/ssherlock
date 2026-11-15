@@ -1,12 +1,13 @@
 //! The main application window and its root view.
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, IntoElement, ParentElement, Pixels, Render, Styled,
-    Subscription, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, div, px,
-    size,
+    App, AppContext as _, Bounds, Context, Entity, Focusable as _, IntoElement, ParentElement,
+    Pixels, Render, Styled, Subscription, TitlebarOptions, Window, WindowBounds, WindowDecorations,
+    WindowOptions, div, px, size,
 };
 use ssherlock_core::app;
 
+use crate::terminal::TerminalView;
 use crate::theme::{ActiveTheme, Appearance, Theme};
 use crate::window_frame::window_frame;
 
@@ -18,9 +19,10 @@ const DEFAULT_HEIGHT: f32 = 720.;
 const MIN_WIDTH: f32 = 480.;
 const MIN_HEIGHT: f32 = 320.;
 
-/// Root view of the main window. For now it shows the app name; later phases put the host list
-/// and terminal tabs here.
+/// Root view of the main window. For now it shows one local terminal; tabs and the host list
+/// come next.
 pub struct MainWindow {
+    terminal: Entity<TerminalView>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -33,7 +35,10 @@ impl MainWindow {
             )));
             cx.notify();
         });
+        let terminal = cx.new(|cx| TerminalView::local(window, cx));
+        terminal.focus_handle(cx).focus(window);
         Self {
+            terminal,
             _subscriptions: vec![appearance],
         }
     }
@@ -45,12 +50,9 @@ impl Render for MainWindow {
         let content = div()
             .flex()
             .flex_1()
-            .items_center()
-            .justify_center()
+            .min_h_0()
             .bg(theme.colors.background)
-            .text_color(theme.colors.text)
-            .text_size(theme.text.display_size)
-            .child(app::NAME);
+            .child(self.terminal.clone());
 
         window_frame(window, &theme, content)
     }
