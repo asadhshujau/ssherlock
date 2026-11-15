@@ -57,6 +57,20 @@ If the maintainer grants a standing exception, record it here with its scope. Du
 they allowed reading docs.rs and the registry sources of `alacritty_terminal`, `portable-pty`
 and `gpui`. That exception ended with Phase 1.
 
+Standing exceptions:
+
+- **`~/.cargo`, any time.** Reading anything under `~/.cargo`, such as dependency sources in
+  `~/.cargo/registry/src/`, needs no asking (granted 2026-11-15).
+- **docs.rs for `russh`, during Phase 2.** Ends when Phase 2 is done.
+
+## Test servers, never real ones
+
+Test SSH against servers you start yourself: the Docker OpenSSH container in
+`crates/ssherlock-ssh/tests/docker/`, or an in-process russh server inside a test. Never connect
+to a real server. Don't look on the maintainer's machine for hosts, `~/.ssh/config`,
+`known_hosts`, keys or a running agent to try. Checks that need a real server go on the manual
+checklist given at the end of a phase.
+
 ## Check the UI yourself
 
 When a change affects what's on screen, launch the app headlessly, look at a screenshot and
@@ -70,7 +84,8 @@ only what you truly can't do yourself, with steps to do it.
 - Always sandbox: own `HOME`/`XDG_DATA_HOME`, `SHELL=/bin/sh`,
   `DBUS_SESSION_BUS_ADDRESS=disabled:` for the app, and stub `xdg-open`/`gio`/… first on
   `PATH`. Without them, a headless Ctrl+click once opened a link in the maintainer's real
-  browser.
+  browser. Also unset `SSH_AUTH_SOCK` and `SSH_AGENT_PID`, or the app can use the maintainer's
+  real SSH agent when it logs in to a test server.
 - Wait for the window with `xdotool search --sync`, not a fixed sleep.
 
 ## Shell gotchas

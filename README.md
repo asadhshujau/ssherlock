@@ -117,6 +117,7 @@ Run it sandboxed, so nothing reaches your real session:
 
 - `HOME`, `XDG_DATA_HOME` and `SHELL` keep the app's logs and its login shell away from your
   configuration.
+- Unsetting `SSH_AUTH_SOCK` and `SSH_AGENT_PID` keeps SSH logins away from your real agent.
 - `DBUS_SESSION_BUS_ADDRESS=disabled:` cuts the app off from your desktop's session bus.
   Otherwise "open this link" goes through the desktop portal, which opens it in your real
   browser.
@@ -133,7 +134,8 @@ for opener in xdg-open gio gnome-open kde-open wslview; do
 done
 Xvfb :99 -screen 0 1280x800x24 & xvfb=$!
 sleep 1   # let the display come up
-env -u WAYLAND_DISPLAY DISPLAY=:99 HOME="$sandbox" XDG_DATA_HOME="$sandbox/share" SHELL=/bin/sh \
+env -u WAYLAND_DISPLAY -u SSH_AUTH_SOCK -u SSH_AGENT_PID \
+  DISPLAY=:99 HOME="$sandbox" XDG_DATA_HOME="$sandbox/share" SHELL=/bin/sh \
   DBUS_SESSION_BUS_ADDRESS=disabled: PATH="$sandbox/stubs:$PATH" \
   VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./target/debug/ssherlock & app=$!
 DISPLAY=:99 xdotool search --sync --name SSHerlock   # wait for the window
