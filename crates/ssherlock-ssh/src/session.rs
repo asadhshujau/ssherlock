@@ -15,6 +15,7 @@ use tokio::time::Instant;
 use tracing::Instrument as _;
 
 use crate::SshError;
+use crate::algorithms::{AlgorithmPreferences, Compression};
 use crate::auth::{AuthMethod, AuthPrompt, Authenticator};
 use crate::connection::ConnectionState;
 use crate::host_keys::HostKeys;
@@ -32,6 +33,8 @@ pub struct ConnectConfig {
     port: u16,
     username: String,
     connect_timeout: Duration,
+    algorithms: AlgorithmPreferences,
+    compression: Compression,
 }
 
 impl ConnectConfig {
@@ -43,6 +46,8 @@ impl ConnectConfig {
             port: DEFAULT_PORT,
             username: username.into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            algorithms: AlgorithmPreferences::default(),
+            compression: Compression::Off,
         }
     }
 
@@ -59,6 +64,30 @@ impl ConnectConfig {
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
+    }
+
+    /// Offer these algorithms instead of the defaults (CONN-17).
+    #[must_use]
+    pub fn with_algorithms(mut self, algorithms: AlgorithmPreferences) -> Self {
+        self.algorithms = algorithms;
+        self
+    }
+
+    /// Compress the connection, or not (CONN-18).
+    #[must_use]
+    pub fn with_compression(mut self, compression: Compression) -> Self {
+        self.compression = compression;
+        self
+    }
+
+    /// See [`ConnectConfig::with_algorithms`].
+    pub fn algorithms(&self) -> &AlgorithmPreferences {
+        &self.algorithms
+    }
+
+    /// See [`ConnectConfig::with_compression`].
+    pub fn compression(&self) -> Compression {
+        self.compression
     }
 
     /// The server's host name or address.
@@ -288,6 +317,8 @@ async fn handshake(
         port: config.port,
         after: config.connect_timeout,
     };
+    // Checked before any network traffic, so a typo in a preference fails at once.
+    let preferred = config.algorithms.to_preferred(config.compression)?;
     let deadline = Instant::now() + config.connect_timeout;
 
     let stream = tokio::time::timeout_at(
@@ -317,6 +348,7 @@ async fn handshake(
     };
     let russh_config = Arc::new(client::Config {
         nodelay: true,
+        preferred,
         ..client::Config::default()
     });
     let handshake = client::connect_stream(russh_config, stream, handler);

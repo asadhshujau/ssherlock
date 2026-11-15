@@ -118,6 +118,15 @@ pub enum SshError {
         request: &'static str,
     },
 
+    /// A preference names an algorithm SSHerlock doesn't support.
+    #[error("the {kind} algorithm {name} is not supported")]
+    UnknownAlgorithm {
+        /// `key exchange`, `host key`, `cipher` or `MAC`.
+        kind: &'static str,
+        /// The name as given.
+        name: String,
+    },
+
     /// A channel closed before it was ready.
     #[error("the server closed the channel")]
     ChannelClosed,
