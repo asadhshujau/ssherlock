@@ -72,7 +72,7 @@ Progress (update in the PR that changes a phase's status):
 | Phase | Status |
 |-------|--------|
 | 0 — Foundations | done (window checked by hand on GNOME Wayland; macOS by CI) |
-| 1 — Terminal core | in progress |
+| 1 — Terminal core | done (exit check on GNOME Wayland and Xvfb; macOS by CI). TERM-05, 10, 11, 12, 13 have leftovers noted in FEATURES.md |
 | 2 — SSH core | next |
 | 3 — Hosts, groups & storage | not started |
 | 4 – 14 | not started |
@@ -158,7 +158,7 @@ Work:
 
 Exit: create 50 hosts in nested groups, search returns in <5 ms, connect from keyboard only.
 
-Features: HOST-01…09, 12, 13, 14, APP-16 (basic).
+Features: HOST-01…09, 12, 13, 14, APP-16 (basic); the rest of TERM-05 (pin tabs, colour by host).
 
 ---
 
@@ -263,7 +263,7 @@ Work:
 
 Exit: four-pane split with broadcast; autocomplete suggests from history; theme import of an `.itermcolors` file.
 
-Features: TERM-04, 06, 07, 14…18, 20…24, 26, HOST-10, HOST-15, APP-07.
+Features: TERM-04, 06, 07, 14…18, 20…24, 26, HOST-10, HOST-15, APP-07; the rest of TERM-11 (ligatures, fallback fonts) and TERM-13 (audible bell, notifications).
 
 ---
 
