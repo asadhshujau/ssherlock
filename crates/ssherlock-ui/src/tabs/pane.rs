@@ -566,6 +566,76 @@ mod tests {
         assert_eq!(pane.read_with(cx, |pane, _| pane.tab_count()), 1);
     }
 
+    /// Regression: the bar didn't block the mouse, so the terminal under it saw every click
+    /// on it and took focus back. Once focus had left the bar, clicking it couldn't return it.
+    #[gpui::test]
+    fn clicking_the_quick_connect_bar_over_a_terminal_focuses_it(cx: &mut TestAppContext) {
+        let (pane, cx) = pane(cx);
+        cx.dispatch_action(QuickConnect);
+        cx.run_until_parked();
+        let bar_has_focus = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                let pane = pane.read(cx);
+                let (bar, _) = pane.quick_connect.as_ref().expect("bar is open");
+                bar.focus_handle(cx).contains_focused(window, cx)
+            })
+        };
+        assert!(bar_has_focus(cx), "the bar takes focus as it opens");
+
+        let size = cx.update(|window, _| window.viewport_size());
+        let on_terminal = gpui::point(size.width / 2., size.height * 0.75);
+        cx.simulate_mouse_move(on_terminal, None, gpui::Modifiers::none());
+        cx.simulate_click(on_terminal, gpui::Modifiers::none());
+        assert!(!bar_has_focus(cx), "clicking the terminal focuses it");
+
+        let field = cx
+            .debug_bounds("quick-connect-input")
+            .expect("bar is drawn");
+        cx.simulate_mouse_move(field.center(), None, gpui::Modifiers::none());
+        cx.simulate_click(field.center(), gpui::Modifiers::none());
+        assert!(
+            bar_has_focus(cx),
+            "clicking the bar's field focuses it again"
+        );
+        assert!(pane.read_with(cx, |pane, _| pane.is_quick_connect_open()));
+    }
+
+    /// Regression: the terminal's find bar didn't block the mouse either, so clicking its
+    /// field from the terminal left focus in the terminal.
+    #[gpui::test]
+    fn clicking_the_find_bar_focuses_it(cx: &mut TestAppContext) {
+        let (pane, cx) = pane(cx);
+        let size = cx.update(|window, _| window.viewport_size());
+        let on_terminal = gpui::point(size.width / 2., size.height * 0.75);
+        let click = |at: gpui::Point<gpui::Pixels>, cx: &mut VisualTestContext| {
+            cx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+            cx.simulate_click(at, gpui::Modifiers::none());
+        };
+        click(on_terminal, cx);
+        cx.dispatch_action(crate::terminal::actions::Find);
+        cx.run_until_parked();
+        let field = cx
+            .debug_bounds("terminal-search-input")
+            .expect("find bar is open");
+        let field_has_focus = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                let terminal = match pane.read(cx).tabs.active().map(|tab| &tab.view) {
+                    Some(TabView::Local(terminal)) => Some(terminal),
+                    _ => None,
+                }
+                .expect("the pane has a local terminal tab");
+                let field = terminal.read(cx).search_focus_handle(cx);
+                field.expect("find bar is open").is_focused(window)
+            })
+        };
+        assert!(field_has_focus(cx), "Find focuses the field");
+
+        click(on_terminal, cx);
+        assert!(!field_has_focus(cx), "clicking the terminal focuses it");
+        click(field.center(), cx);
+        assert!(field_has_focus(cx), "clicking the field focuses it again");
+    }
+
     #[gpui::test]
     fn quick_connect_opens_a_remote_tab(cx: &mut TestAppContext) {
         // A real runtime: the connection attempt runs on it. Port 9 on localhost has nothing
