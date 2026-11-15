@@ -15,6 +15,7 @@ use tokio::time::Instant;
 use tracing::Instrument as _;
 
 use crate::SshError;
+use crate::auth::{AuthMethod, AuthPrompt, Authenticator};
 use crate::host_keys::HostKeys;
 use crate::known_hosts::{HostKeyStatus, KnownHostName, KnownKey};
 
@@ -85,6 +86,8 @@ impl ConnectConfig {
 pub enum SessionEvent {
     /// The server's host key isn't trusted yet; the user must decide.
     HostKey(HostKeyPrompt),
+    /// Logging in needs something typed: a password, a passphrase, a 2FA code.
+    Prompt(AuthPrompt),
     /// The server's pre-login banner (`/etc/issue.net` and the like), to show the user.
     Banner(String),
 }
@@ -168,6 +171,7 @@ impl HostKeyPrompt {
 pub struct Session {
     handle: client::Handle<ClientHandler>,
     config: ConnectConfig,
+    events: mpsc::Sender<SessionEvent>,
 }
 
 impl std::fmt::Debug for Session {
@@ -194,12 +198,35 @@ impl Session {
     ) -> Result<Self, SshError> {
         let span = tracing::info_span!("ssh", host = %config.host, port = config.port);
         async move {
-            let handle = handshake(&config, host_keys, events).await?;
+            let handle = handshake(&config, host_keys, events.clone()).await?;
             tracing::info!("connected");
-            Ok(Self { handle, config })
+            Ok(Self {
+                handle,
+                config,
+                events,
+            })
         }
         .instrument(span)
         .await
+    }
+
+    /// Logs in as the configured user, trying `methods` in order until one works. Prompts go
+    /// to the UI as [`SessionEvent::Prompt`].
+    ///
+    /// # Errors
+    ///
+    /// [`SshError::AuthFailed`] if every method was refused, [`SshError::AuthCancelled`] if the
+    /// user dismissed a prompt, [`SshError::Protocol`] if the connection failed.
+    pub async fn authenticate(&mut self, methods: &[AuthMethod]) -> Result<(), SshError> {
+        let span =
+            tracing::info_span!("auth", host = %self.config.host, user = %self.config.username);
+        let mut authenticator = Authenticator {
+            handle: &mut self.handle,
+            user: &self.config.username,
+            host: &self.config.host,
+            events: &self.events,
+        };
+        authenticator.run(methods).instrument(span).await
     }
 
     /// What this session connected to.
@@ -282,7 +309,7 @@ async fn handshake(
 }
 
 /// russh's callbacks for one connection.
-struct ClientHandler {
+pub(crate) struct ClientHandler {
     name: KnownHostName,
     host_keys: HostKeys,
     events: mpsc::Sender<SessionEvent>,

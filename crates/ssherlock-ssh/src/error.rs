@@ -84,4 +84,30 @@ pub enum SshError {
     /// The SSH protocol layer failed.
     #[error("SSH protocol error")]
     Protocol(#[from] russh::Error),
+
+    /// Every login method was tried and refused, or none could be tried.
+    #[error("could not log in as {user} (tried: {})", if tried.is_empty() { "nothing the server accepts".to_owned() } else { tried.join(", ") })]
+    AuthFailed {
+        /// Who tried to log in.
+        user: String,
+        /// The methods the server refused, in order.
+        tried: Vec<&'static str>,
+    },
+
+    /// The user dismissed a login prompt.
+    #[error("the login was cancelled")]
+    AuthCancelled,
+
+    /// A login prompt was answered with the wrong number of answers (a UI bug).
+    #[error("a login prompt expected {expected} answers but got {got}")]
+    PromptAnswerCount {
+        /// Fields in the prompt.
+        expected: usize,
+        /// Answers received.
+        got: usize,
+    },
+
+    /// The server kept sending keyboard-interactive prompts.
+    #[error("the server sent too many login prompts")]
+    TooManyPrompts,
 }

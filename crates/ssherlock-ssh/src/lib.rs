@@ -3,11 +3,13 @@
 //! This is a **service** crate. It talks to the UI only through events sent over channels.
 #![forbid(unsafe_code)]
 
+pub mod auth;
 mod error;
 pub mod host_keys;
 pub mod known_hosts;
 pub mod session;
 
+pub use auth::{AgentSocket, AuthMethod};
 pub use error::SshError;
 pub use host_keys::HostKeys;
 pub use session::{ConnectConfig, Session, SessionEvent};
