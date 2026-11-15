@@ -3,6 +3,7 @@
 //! This is a **service** crate. It talks to the UI only through events sent over channels.
 #![forbid(unsafe_code)]
 
+pub mod algorithms;
 pub mod auth;
 pub mod connection;
 mod error;
@@ -11,6 +12,7 @@ pub mod known_hosts;
 pub mod session;
 mod shell;
 
+pub use algorithms::{AlgorithmPreferences, Compression};
 pub use auth::{AgentSocket, AuthMethod};
 pub use connection::{ConnectionState, RemoteShellConfig, spawn_shell};
 pub use error::SshError;
