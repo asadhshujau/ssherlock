@@ -38,8 +38,9 @@ const EVENT_CAPACITY: usize = 64;
 const FRAME: Duration = Duration::from_millis(8);
 
 /// Most output parsed in one go before the task looks at commands again, so typing stays
-/// responsive while a program prints without pause.
-const BATCH_BYTES: usize = 1024 * 1024;
+/// responsive while a program prints without pause. Measured on a release build, 256 KiB
+/// parses in about 5 ms; 1 MiB took up to 22 ms, longer than a frame.
+const BATCH_BYTES: usize = 256 * 1024;
 
 /// Controls a terminal running on the Tokio runtime.
 ///
@@ -400,6 +401,7 @@ impl Task {
 
     /// Parses one item of output plus whatever else is already waiting, up to [`BATCH_BYTES`].
     async fn output(&mut self, first: PtyOutput) {
+        let started = std::time::Instant::now();
         let mut parsed = 0;
         let mut exit = None;
         let mut next = Some(first);
@@ -416,6 +418,11 @@ impl Task {
             }
         }
         self.is_dirty = true;
+        tracing::trace!(
+            bytes = parsed,
+            micros = started.elapsed().as_micros(),
+            "parsed output"
+        );
 
         let reply = self.terminal.take_reply();
         if !reply.is_empty() {
@@ -473,8 +480,10 @@ impl Task {
     }
 
     fn publish(&mut self) {
-        self.snapshots
-            .send_replace(Arc::new(self.terminal.snapshot()));
+        let started = std::time::Instant::now();
+        let snapshot = Arc::new(self.terminal.snapshot());
+        tracing::trace!(micros = started.elapsed().as_micros(), "built snapshot");
+        self.snapshots.send_replace(snapshot);
         self.is_dirty = false;
         self.last_publish = Instant::now();
     }
