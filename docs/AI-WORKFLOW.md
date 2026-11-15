@@ -84,7 +84,8 @@ only what you truly can't do yourself, with steps to do it.
 - Always sandbox: own `HOME`/`XDG_DATA_HOME`, `SHELL=/bin/sh`,
   `DBUS_SESSION_BUS_ADDRESS=disabled:` for the app, and stub `xdg-open`/`gio`/… first on
   `PATH`. Without them, a headless Ctrl+click once opened a link in the maintainer's real
-  browser.
+  browser. Also unset `SSH_AUTH_SOCK` and `SSH_AGENT_PID`, or the app can use the maintainer's
+  real SSH agent when it logs in to a test server.
 - Wait for the window with `xdotool search --sync`, not a fixed sleep.
 
 ## Shell gotchas
