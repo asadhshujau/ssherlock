@@ -57,6 +57,14 @@ If the maintainer grants a standing exception, record it here with its scope. Du
 they allowed reading docs.rs and the registry sources of `alacritty_terminal`, `portable-pty`
 and `gpui`. That exception ended with Phase 1.
 
+## Test servers, never real ones
+
+Test SSH against servers you start yourself: the Docker OpenSSH container in
+`crates/ssherlock-ssh/tests/docker/`, or an in-process russh server inside a test. Never connect
+to a real server. Don't look on the maintainer's machine for hosts, `~/.ssh/config`,
+`known_hosts`, keys or a running agent to try. Checks that need a real server go on the manual
+checklist given at the end of a phase.
+
 ## Check the UI yourself
 
 When a change affects what's on screen, launch the app headlessly, look at a screenshot and
