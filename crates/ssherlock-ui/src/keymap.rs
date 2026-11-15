@@ -3,7 +3,7 @@
 //! The file is a list of sections. Each has an optional `context` (matched against the
 //! `key_context` of the focused view and its ancestors) and a map from keystrokes to action
 //! names, e.g. `"mod-v": "terminal::Paste"`. `mod-` is expanded per platform by
-//! [`platform::expand_keystrokes`].
+//! [`platform::expand_keystrokes`]; gpui's `secondary-` (Cmd on macOS, Ctrl elsewhere) also works.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;

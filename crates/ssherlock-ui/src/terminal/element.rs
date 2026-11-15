@@ -31,10 +31,13 @@ pub struct CellMetrics {
 }
 
 impl CellMetrics {
-    /// Measures `family` at the theme's terminal text size.
-    pub fn measure(theme: &Theme, family: SharedString, window: &Window) -> Self {
+    /// Measures `family` at the theme's terminal text size, zoomed by `zoom` steps.
+    pub fn measure(theme: &Theme, family: SharedString, zoom: i32, window: &Window) -> Self {
         let font = font(family);
-        let font_size = theme.text.terminal_size;
+        let font_size = px(super::zoomed_size(
+            f32::from(theme.text.terminal_size),
+            zoom,
+        ));
         let text_system = window.text_system();
         let font_id = text_system.resolve_font(&font);
         // Monospace fonts usually agree on the advance of every glyph; `m` is the customary one
@@ -137,6 +140,10 @@ pub struct PaintStyle {
     pub metrics: CellMetrics,
     /// Whether the terminal has keyboard focus; an unfocused terminal shows a hollow cursor.
     pub is_focused: bool,
+    /// False during the "off" half of a blinking cursor.
+    pub is_cursor_visible: bool,
+    /// Drawn over the whole terminal for a moment when the bell rings.
+    pub bell_flash: Option<Hsla>,
     /// Thickness of beam and underline cursors.
     pub cursor_thickness: Pixels,
     /// Drawn behind selected text.
@@ -229,7 +236,11 @@ pub fn paint(
 
     paint_scrollbar(bounds, snapshot, style, window);
 
-    if let Some(cursor) = snapshot.cursor {
+    if let Some(flash) = style.bell_flash {
+        window.paint_quad(fill(bounds, flash));
+    }
+
+    if let Some(cursor) = snapshot.cursor.filter(|_| style.is_cursor_visible) {
         let cell = snapshot.cell(cursor.row, cursor.column);
         let columns = if cell.is_some_and(|c| c.style.is_wide()) {
             2.

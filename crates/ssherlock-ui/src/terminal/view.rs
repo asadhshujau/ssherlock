@@ -5,6 +5,7 @@
 //! to paint the next frame and map mouse positions to cells.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -22,13 +23,13 @@ use ssherlock_terminal::{
     spawn_local,
 };
 
-use super::DefaultShell;
 use super::actions::{
     ClearScrollback, Copy, DismissSearch, Find, Paste, ResetTerminal, ScrollLineDown, ScrollLineUp,
     ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, SearchNewer, SearchOlder,
 };
 use super::element::{self, CellMetrics, PaintStyle};
 use super::keys::{self, KeyInput};
+use super::{DefaultShell, TerminalZoom};
 use crate::components::{
     ContextMenu, InputKind, MenuDismissed, MenuItem, Modal, ModalEvent, TextInput, TextInputEvent,
 };
@@ -43,7 +44,15 @@ pub enum TerminalViewEvent {
     TitleChanged,
     /// The program exited.
     Exited(PtyExit),
+    /// The program rang the bell.
+    Bell,
 }
+
+/// How long the visual bell shows.
+const BELL_FLASH: Duration = Duration::from_millis(150);
+
+/// Half a cursor blink: on for this long, then off for this long.
+const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
 /// Where the view is in its life.
 enum State {
@@ -56,6 +65,13 @@ enum State {
     },
     /// The shell couldn't be started; the message says why.
     Failed(SharedString),
+}
+
+/// A blinking cursor's state.
+struct Blink {
+    /// The cursor is drawn in this half of the cycle.
+    is_on: bool,
+    _task: Task<()>,
 }
 
 /// A multi-line paste waiting for the user to confirm it.
@@ -98,6 +114,12 @@ pub struct TerminalView {
     /// The latest link lookup; replacing it cancels the previous one.
     link_lookup: Option<Task<()>>,
     pending_paste: Option<PendingPaste>,
+    /// While the visual bell shows: the timer that turns it off.
+    bell_flash: Option<Task<()>>,
+    /// The terminal has keyboard focus.
+    is_focused: bool,
+    /// While the cursor blinks: its phase and the timer that flips it.
+    blink: Option<Blink>,
     context_menu: Option<(Entity<ContextMenu>, Subscription)>,
     _subscriptions: Vec<Subscription>,
     /// Background work owned by the view; dropping the view cancels it.
@@ -125,6 +147,7 @@ impl TerminalView {
                 view.focus_changed(false, cx);
             }),
             cx.observe_global::<Theme>(Self::theme_changed),
+            cx.observe_global::<TerminalZoom>(|_, cx| cx.notify()),
         ];
         let mut view = Self {
             state: State::Starting,
@@ -142,6 +165,9 @@ impl TerminalView {
             last_mouse: None,
             link_lookup: None,
             pending_paste: None,
+            bell_flash: None,
+            is_focused: false,
+            blink: None,
             context_menu: None,
             _subscriptions: subscriptions,
             tasks: Vec::new(),
@@ -245,8 +271,64 @@ impl TerminalView {
     fn set_snapshot(&mut self, new: Arc<Snapshot>, cx: &mut Context<Self>) {
         if let State::Running { snapshot, .. } = &mut self.state {
             *snapshot = new;
+            self.update_blink(cx);
             cx.notify();
         }
+    }
+
+    /// Flashes the terminal briefly.
+    fn ring_bell(&mut self, cx: &mut Context<Self>) {
+        let timer = cx.background_executor().timer(BELL_FLASH);
+        self.bell_flash = Some(cx.spawn(async move |this, cx| {
+            timer.await;
+            if this
+                .update(cx, |view, cx| {
+                    view.bell_flash = None;
+                    cx.notify();
+                })
+                .is_err()
+            {
+                tracing::debug!("terminal view closed while its bell was showing");
+            }
+        }));
+    }
+
+    /// Starts or stops the blink loop: the cursor blinks while the terminal is focused and the
+    /// program asked for a blinking cursor.
+    fn update_blink(&mut self, cx: &mut Context<Self>) {
+        let wants_blink = self.is_focused
+            && self
+                .handle()
+                .and_then(|(_, snapshot)| snapshot.cursor)
+                .is_some_and(|cursor| cursor.is_blinking);
+        match (wants_blink, self.blink.is_some()) {
+            (true, false) => self.restart_blink(cx),
+            (false, true) => self.blink = None,
+            _ => {}
+        }
+    }
+
+    /// Shows the cursor and starts a fresh blink cycle, so it stays solid while you type.
+    fn restart_blink(&mut self, cx: &mut Context<Self>) {
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(BLINK_INTERVAL).await;
+                let toggled = this.update(cx, |view, cx| {
+                    if let Some(blink) = &mut view.blink {
+                        blink.is_on = !blink.is_on;
+                        cx.notify();
+                    }
+                });
+                if toggled.is_err() {
+                    break;
+                }
+            }
+        });
+        self.blink = Some(Blink {
+            is_on: true,
+            _task: task,
+        });
     }
 
     fn terminal_event(&mut self, event: TerminalEvent, cx: &mut Context<Self>) {
@@ -255,8 +337,10 @@ impl TerminalView {
                 self.title = title.map(SharedString::from);
                 cx.emit(TerminalViewEvent::TitleChanged);
             }
-            // The visual and audible bell arrive with TERM-13.
-            TerminalEvent::Bell => {}
+            TerminalEvent::Bell => {
+                self.ring_bell(cx);
+                cx.emit(TerminalViewEvent::Bell);
+            }
             TerminalEvent::Exited(exit) => {
                 self.exit = Some(exit.clone());
                 cx.emit(TerminalViewEvent::Exited(exit));
@@ -282,6 +366,8 @@ impl TerminalView {
     }
 
     fn focus_changed(&mut self, is_focused: bool, cx: &mut Context<Self>) {
+        self.is_focused = is_focused;
+        self.update_blink(cx);
         if let Some((_, snapshot)) = self.handle()
             && let Some(bytes) = encode_focus(is_focused, snapshot.modes)
         {
@@ -331,6 +417,9 @@ impl TerminalView {
             None => return,
         };
         self.write(bytes);
+        if self.blink.is_some() {
+            self.restart_blink(cx);
+        }
         cx.stop_propagation();
     }
 
@@ -816,7 +905,19 @@ impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let family = mono_family(&theme, window, cx);
-        let metrics = CellMetrics::measure(&theme, family, window);
+        // Focus events don't arrive for focus given before the first frame (a new window or
+        // tab), so the frame itself keeps the blink in step with focus.
+        let is_focused = self.focus_handle.is_focused(window);
+        if is_focused != self.is_focused {
+            self.is_focused = is_focused;
+            self.update_blink(cx);
+        }
+        let zoom = cx
+            .try_global::<TerminalZoom>()
+            .copied()
+            .unwrap_or_default()
+            .0;
+        let metrics = CellMetrics::measure(&theme, family, zoom, window);
         self.metrics = Some(metrics.clone());
 
         let background = match &self.state {
@@ -861,7 +962,9 @@ impl Render for TerminalView {
             State::Running { snapshot, .. } => {
                 let style = PaintStyle {
                     metrics,
-                    is_focused: self.focus_handle.is_focused(window),
+                    is_focused,
+                    is_cursor_visible: self.blink.as_ref().is_none_or(|blink| blink.is_on),
+                    bell_flash: self.bell_flash.as_ref().map(|_| theme.terminal.bell_flash),
                     cursor_thickness: theme.metrics.cursor_thickness,
                     selection: theme.terminal.selection,
                     search_match: theme.terminal.search_match,

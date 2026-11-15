@@ -109,6 +109,8 @@ pub struct TerminalColors {
     pub search_match: Hsla,
     /// Behind the search match the user is on.
     pub search_match_focused: Hsla,
+    /// Over the whole terminal for a moment when the bell rings.
+    pub bell_flash: Hsla,
 }
 
 /// Spacing scale for gaps and padding.
@@ -249,6 +251,7 @@ impl Theme {
                 selection: rgba(0xe0a8_4a4d).into(),
                 search_match: rgba(0x5cbe_c740).into(),
                 search_match_focused: rgba(0xe0c0_7880).into(),
+                bell_flash: rgba(0xffff_ff1f).into(),
             },
             spacing: Spacing::default(),
             radius: Radius::default(),
@@ -307,6 +310,7 @@ impl Theme {
                 selection: rgba(0xa86a_0038).into(),
                 search_match: rgba(0x1778_8933).into(),
                 search_match_focused: rgba(0xc290_0066).into(),
+                bell_flash: rgba(0x0000_001a).into(),
             },
             spacing: Spacing::default(),
             radius: Radius::default(),

@@ -27,7 +27,11 @@
       "mod-down": "terminal::ScrollLineDown",
       "mod-k": "terminal::ClearScrollback",
       "mod-alt-r": "terminal::ResetTerminal",
-      "mod-f": "terminal::Find"
+      "mod-f": "terminal::Find",
+      "secondary-=": "terminal::ZoomIn",
+      "secondary-+": "terminal::ZoomIn",
+      "secondary--": "terminal::ZoomOut",
+      "secondary-0": "terminal::ResetZoom"
     }
   },
   {

@@ -23,6 +23,8 @@ struct PaneTab {
     view: Entity<TerminalView>,
     /// Chosen by the user; wins over the program's title.
     name: Option<SharedString>,
+    /// The bell rang while the tab was in the background.
+    has_bell: bool,
     _subscription: Subscription,
 }
 
@@ -108,6 +110,7 @@ impl Pane {
         self.tabs.open(PaneTab {
             view,
             name: None,
+            has_bell: false,
             _subscription: subscription,
         });
         self.focus_active(window, cx);
@@ -120,6 +123,18 @@ impl Pane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if *event == TerminalViewEvent::Bell {
+            let id = view.entity_id();
+            let active = self.tabs.active().map(|tab| tab.view.entity_id());
+            if active != Some(id)
+                && let Some(index) = self.tabs.position(|tab| tab.view.entity_id() == id)
+                && let Some(tab) = self.tabs.get_mut(index)
+            {
+                tab.has_bell = true;
+                cx.notify();
+            }
+            return;
+        }
         // A shell that ended normally (`exit`, Ctrl+D) closes its tab. A new title, or a shell
         // that failed, only needs a redraw: the failed one stays open so its last output and
         // status can be read.
@@ -149,7 +164,12 @@ impl Pane {
         self.focus_active(window, cx);
     }
 
-    fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.tabs.active_index()
+            && let Some(tab) = self.tabs.get_mut(index)
+        {
+            tab.has_bell = false;
+        }
         match self.tabs.active() {
             Some(tab) => tab.view.focus_handle(cx).focus(window),
             None => self.focus_handle.focus(window),
@@ -265,6 +285,7 @@ impl Pane {
             };
             Tab::new(("tab", id.as_u64()), label)
                 .active(self.tabs.active_index() == Some(index))
+                .indicator(tab.has_bell)
                 .on_click(
                     cx.listener(move |pane, event: &gpui::ClickEvent, window, cx| {
                         if event.click_count() == 2 {
