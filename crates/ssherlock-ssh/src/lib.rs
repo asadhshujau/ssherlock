@@ -8,6 +8,7 @@ mod error;
 pub mod host_keys;
 pub mod known_hosts;
 pub mod session;
+mod shell;
 
 pub use auth::{AgentSocket, AuthMethod};
 pub use error::SshError;

@@ -110,4 +110,15 @@ pub enum SshError {
     /// The server kept sending keyboard-interactive prompts.
     #[error("the server sent too many login prompts")]
     TooManyPrompts,
+
+    /// The server refused a channel request.
+    #[error("the server refused to start a {request}")]
+    ChannelRequestRefused {
+        /// What was asked for: `pty` or `shell`.
+        request: &'static str,
+    },
+
+    /// A channel closed before it was ready.
+    #[error("the server closed the channel")]
+    ChannelClosed,
 }
