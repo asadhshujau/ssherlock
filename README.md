@@ -4,9 +4,43 @@ A Rust SSH client. Hosts, keys, port forwarding, snippets, SFTP, sync — everyt
 SSH client should do, with no paid tier. Built with [gpui](https://crates.io/crates/gpui) and
 [russh](https://crates.io/crates/russh).
 
-> **Status: early development (Phase 0 done, Phase 1 next).** Nothing usable yet: the app opens an
-> empty window. Follow [docs/PLAN.md](docs/PLAN.md) for the build order and [docs/FEATURES.md](docs/FEATURES.md)
-> for the full checklist.
+> **Status: early development (Phase 2 done, Phase 3 next).** SSHerlock runs local terminals in
+> tabs and connects to SSH servers you type in. There are no saved hosts yet; those come in
+> Phase 3. Follow [docs/PLAN.md](docs/PLAN.md) for the build order and
+> [docs/FEATURES.md](docs/FEATURES.md) for the full checklist.
+
+## What works today
+
+- **Local terminals** in tabs: rename, reorder, search the scrollback, copy and paste, open
+  links, zoom.
+- **SSH via quick connect.** Type `user@host`, `user@host:port` or `ssh://user@host:port`. If you
+  leave out the user, your local user name is used.
+- **Login:** your SSH agent first, then `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa` (asking for
+  a passphrase if a key needs one), then password, then keyboard-interactive (2FA, PAM).
+- **Host keys:** a new host shows its SHA-256 fingerprint and randomart before you trust it. A
+  changed key gets a red warning that Enter can't accept. Hosts already in
+  `~/.ssh/known_hosts` are trusted without asking. SSHerlock reads that file but never writes
+  to it; keys you trust are saved in SSHerlock's own `known_hosts`, in the data folder below.
+- **Staying connected:** keep-alive every 15 seconds with the latency in the status bar, and
+  automatic reconnection with backoff when the network drops or the machine sleeps.
+
+| Shortcut | macOS | Linux |
+|----------|-------|-------|
+| Quick connect | Cmd+O | Ctrl+Shift+O |
+| New tab / close tab | Cmd+T / Cmd+W | Ctrl+Shift+T / Ctrl+Shift+W |
+| Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab | Ctrl+Tab / Ctrl+Shift+Tab |
+| Rename tab | Cmd+R | Ctrl+Shift+R |
+| Copy / paste | Cmd+C / Cmd+V | Ctrl+Shift+C / Ctrl+Shift+V |
+| Find in scrollback | Cmd+F | Ctrl+Shift+F |
+| Zoom in / out / reset | Cmd+= / Cmd+- / Cmd+0 | Ctrl+= / Ctrl+- / Ctrl+0 |
+
+On Linux the shortcuts add Shift so plain Ctrl keys still reach the shell. All of them are in
+[keymap/default.json](crates/ssherlock-ui/src/keymap/default.json). Right-click in a terminal
+for copy, paste, find, clear scrollback and reset.
+
+SSHerlock keeps its `known_hosts` and its logs in its data folder:
+`~/.local/share/ssherlock/` on Linux, `~/Library/Application Support/io.github.asadhshujau.SSHerlock/`
+on macOS.
 
 ## Principles
 
@@ -77,7 +111,7 @@ On Linux you also need a working Vulkan driver for your GPU. Mesa covers Intel a
 use the proprietary driver. Run `vulkaninfo --summary` from `vulkan-tools` to check. Both X11 and
 Wayland sessions are supported.
 
-### 4. Docker (needed from Phase 2)
+### 4. Docker
 
 The SSH integration tests run against an OpenSSH server in Docker (`crates/ssherlock-ssh/tests/docker/`).
 Install Docker Engine or Docker Desktop (macOS) or Podman with Docker compatibility. If Docker is
