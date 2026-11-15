@@ -17,6 +17,7 @@ use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{Config, Osc52, Term, point_to_viewport, viewport_to_point};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape as VteCursorShape, NamedColor};
 
+use crate::link::{Link, URL_PATTERN, trailing_junk};
 use crate::palette::{Palette, Rgb};
 use crate::pty::PtyExit;
 use crate::search::{MAX_COUNTED_MATCHES, SearchDirection, SearchStatus, literal_pattern};
@@ -86,6 +87,8 @@ pub struct Terminal {
     pending_events: Vec<TerminalEvent>,
     pending_reply: Vec<u8>,
     search: Option<ActiveSearch>,
+    /// Finds URLs in plain text; `None` only if the pattern failed to build.
+    url_regex: Option<RegexSearch>,
     size: TerminalSize,
     palette: Palette,
 }
@@ -107,6 +110,9 @@ impl Terminal {
             pending_events: Vec::new(),
             pending_reply: Vec::new(),
             search: None,
+            url_regex: RegexSearch::new(URL_PATTERN)
+                .inspect_err(|error| tracing::warn!(%error, "URL detection is off"))
+                .ok(),
             size,
             palette: config.palette.clone(),
         }
@@ -322,6 +328,63 @@ impl Terminal {
             (None, SearchDirection::Newer) => Point::new(self.term.topmost_line(), Column(0)),
         };
         self.focus_match_from(origin, direction);
+    }
+
+    /// The link at a visible cell: an `OSC 8` hyperlink, or else a URL in the text.
+    pub fn link_at(&mut self, at: GridPoint) -> Option<Link> {
+        let point = self.grid_point(at);
+        self.hyperlink_at(point).or_else(|| self.url_at(point))
+    }
+
+    /// The `OSC 8` hyperlink covering `point`, extended over the neighbouring cells that carry
+    /// the same link.
+    fn hyperlink_at(&self, point: Point) -> Option<Link> {
+        /// A link longer than this many cells is cut off rather than scanned forever.
+        const MAX_CELLS: usize = 4096;
+        let grid = self.term.grid();
+        let target = grid[point].hyperlink()?;
+        let same = |p: Point| grid[p].hyperlink().as_ref() == Some(&target);
+        let mut start = point;
+        let mut end = point;
+        for _ in 0..MAX_CELLS {
+            let previous = start.sub(&self.term, Boundary::Grid, 1);
+            if previous == start || !same(previous) {
+                break;
+            }
+            start = previous;
+        }
+        for _ in 0..MAX_CELLS {
+            let next = end.add(&self.term, Boundary::Grid, 1);
+            if next == end || !same(next) {
+                break;
+            }
+            end = next;
+        }
+        Some(Link {
+            uri: target.uri().to_owned(),
+            range: self.visible_range(start, end, false)?,
+        })
+    }
+
+    /// The URL in plain text covering `point`, searching the whole (possibly wrapped) line.
+    fn url_at(&mut self, point: Point) -> Option<Link> {
+        let regex = self.url_regex.as_mut()?;
+        let line_start = self.term.line_search_left(point);
+        let line_end = self.term.line_search_right(point);
+        let found = RegexIter::new(line_start, line_end, Direction::Right, &self.term, regex)
+            .find(|found| found.contains(&point))?;
+        let text = self.term.bounds_to_string(*found.start(), *found.end());
+        let junk = trailing_junk(&text);
+        let end = found.end().sub(&self.term, Boundary::Grid, junk);
+        if point > end {
+            // The pointer is on punctuation after the URL.
+            return None;
+        }
+        let kept = text.chars().count() - junk;
+        Some(Link {
+            uri: text.chars().take(kept).collect(),
+            range: self.visible_range(*found.start(), end, false)?,
+        })
     }
 
     /// Ends the search.
@@ -1298,6 +1361,61 @@ mod tests {
         term.set_search("abc");
         term.clear_search();
         assert_eq!(term.snapshot().search_status, None);
+    }
+
+    fn link(term: &mut Terminal, row: usize, column: usize) -> Option<(String, usize, usize)> {
+        term.link_at(GridPoint::new(row, column))
+            .map(|link| (link.uri, link.range.start.column, link.range.end.column))
+    }
+
+    #[test]
+    fn urls_in_text_are_found_and_trimmed() {
+        let mut term = terminal(60, 3);
+        term.feed(b"see (https://example.com/a?b=1). or mailto:me@x.org!");
+        let url = Some(("https://example.com/a?b=1".to_owned(), 5, 29));
+        assert_eq!(link(&mut term, 0, 5), url, "first character");
+        assert_eq!(link(&mut term, 0, 29), url, "last character");
+        assert_eq!(
+            link(&mut term, 0, 30),
+            None,
+            "closing bracket isn't part of it"
+        );
+        assert_eq!(link(&mut term, 0, 2), None, "plain text");
+        assert_eq!(
+            link(&mut term, 0, 40),
+            Some(("mailto:me@x.org".to_owned(), 36, 50))
+        );
+    }
+
+    #[test]
+    fn urls_wrapped_across_lines_are_whole() {
+        let mut term = terminal(10, 4);
+        term.feed(b"https://a.example/long");
+        let found = term.link_at(GridPoint::new(1, 3)).unwrap();
+        assert_eq!(found.uri, "https://a.example/long");
+        assert_eq!(
+            found.range,
+            VisibleRange {
+                start: GridPoint::new(0, 0),
+                end: GridPoint::new(2, 1),
+                is_block: false,
+            }
+        );
+    }
+
+    #[test]
+    fn osc_8_hyperlinks_win_over_their_text() {
+        let mut term = terminal(40, 2);
+        term.feed(b"x \x1b]8;;https://real.example/\x1b\\click here\x1b]8;;\x1b\\ y");
+        let found = term.link_at(GridPoint::new(0, 6)).unwrap();
+        assert_eq!(found.uri, "https://real.example/");
+        assert_eq!((found.range.start.column, found.range.end.column), (2, 11));
+        assert!(found.is_safe_to_open());
+        assert_eq!(term.link_at(GridPoint::new(0, 13)), None);
+
+        term.feed(b"\r\n\x1b]8;;file:///etc/passwd\x1b\\docs\x1b]8;;\x1b\\");
+        let found = term.link_at(GridPoint::new(1, 1)).unwrap();
+        assert!(!found.is_safe_to_open());
     }
 
     #[test]

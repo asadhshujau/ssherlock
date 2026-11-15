@@ -73,6 +73,23 @@ pub fn read_from_primary(cx: &App) -> Option<ClipboardItem> {
     None
 }
 
+/// Whether `modifiers` is the one held to open links with a click: Cmd on macOS, Ctrl
+/// elsewhere (as in Terminal.app and GNOME Terminal). A plain click selects text.
+pub fn is_link_modifier(modifiers: &gpui::Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.platform
+    } else {
+        modifiers.control
+    }
+}
+
+/// The name of the link modifier, for hints.
+pub const LINK_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
+
 /// The modifiers that `mod-` stands for in `keymap/default.json`.
 ///
 /// On macOS app shortcuts use Cmd. Elsewhere Ctrl alone belongs to the shell (Ctrl+C, Ctrl+W,
@@ -120,6 +137,25 @@ mod tests {
             assert_eq!(expand_with(spec, prefix), expected, "{spec}");
         }
         assert!(expand_keystrokes("mod-c").ends_with("-c"));
+    }
+
+    #[test]
+    fn link_modifier_is_cmd_on_macos_and_ctrl_elsewhere() {
+        let ctrl = gpui::Modifiers {
+            control: true,
+            ..gpui::Modifiers::default()
+        };
+        let cmd = gpui::Modifiers {
+            platform: true,
+            ..gpui::Modifiers::default()
+        };
+        let expected = if cfg!(target_os = "macos") {
+            (false, true)
+        } else {
+            (true, false)
+        };
+        assert_eq!((is_link_modifier(&ctrl), is_link_modifier(&cmd)), expected);
+        assert!(!is_link_modifier(&gpui::Modifiers::default()));
     }
 
     #[test]

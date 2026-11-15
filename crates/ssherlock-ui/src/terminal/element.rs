@@ -12,7 +12,7 @@ use gpui::{
     StrikethroughStyle, TextRun, UnderlineStyle, Window, fill, font, outline, point, px, size,
 };
 use ssherlock_terminal::{
-    CellSide, CellStyle, CursorShape, Rgb, Snapshot, SnapshotCell, TerminalSize,
+    CellSide, CellStyle, CursorShape, Rgb, Snapshot, SnapshotCell, TerminalSize, VisibleRange,
 };
 
 use crate::theme::{Theme, from_rgb};
@@ -149,6 +149,12 @@ pub struct PaintStyle {
     pub scrollbar: Hsla,
     /// The scroll indicator's width.
     pub scrollbar_width: Pixels,
+    /// The link under the pointer, underlined while the link modifier is held.
+    pub link: Option<VisibleRange>,
+    /// Colour of that underline.
+    pub link_color: Hsla,
+    /// Thickness of that underline.
+    pub link_thickness: Pixels,
 }
 
 /// Paints `snapshot` into `bounds`.
@@ -197,6 +203,23 @@ pub fn paint(
                     color,
                 ));
             }
+        }
+        if let Some(columns) = style
+            .link
+            .and_then(|link| link.columns_on(row, snapshot.columns()))
+        {
+            let start = metrics.cell_origin(origin, row, *columns.start());
+            let y = start.y + metrics.line_height - style.link_thickness;
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(start.x, y),
+                    size(
+                        metrics.cell_width * count(columns.count()),
+                        style.link_thickness,
+                    ),
+                ),
+                style.link_color,
+            ));
         }
         for batch in text_batches(line) {
             let start = metrics.cell_origin(origin, row, batch.column);
