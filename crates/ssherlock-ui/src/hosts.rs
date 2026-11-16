@@ -6,6 +6,7 @@
 //! tested without gpui.
 
 pub mod actions;
+pub mod connect;
 pub mod detail;
 pub mod editor;
 pub mod fields;
@@ -15,8 +16,9 @@ pub mod model;
 pub mod nav;
 pub mod selection;
 
+pub use connect::ConnectRequest;
 use gpui::App;
-pub use list::{ConnectRequest, HostList, HostListEvent};
+pub use list::{HostList, HostListEvent};
 pub use model::{HostsModel, LoadState};
 
 /// Sets up the hosts feature. Its actions are handled by the hosts page and bound in

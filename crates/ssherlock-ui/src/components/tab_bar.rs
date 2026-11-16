@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
-    MouseButton, ParentElement, RenderOnce, SharedString, Stateful,
+    AnyElement, App, ClickEvent, Div, ElementId, Hsla, InteractiveElement, Interactivity,
+    IntoElement, MouseButton, ParentElement, RenderOnce, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, Window, div,
 };
 
@@ -25,6 +25,8 @@ pub struct Tab {
     label: AnyElement,
     is_active: bool,
     has_indicator: bool,
+    is_pinned: bool,
+    mark: Option<Hsla>,
     on_close: Option<CloseHandler>,
 }
 
@@ -36,8 +38,26 @@ impl Tab {
             label: label.into_any_element(),
             is_active: false,
             has_indicator: false,
+            is_pinned: false,
+            mark: None,
             on_close: None,
         }
+    }
+
+    /// Draws the tab as pinned: a hollow ring before the label. Leave out `on_close` for a
+    /// pinned tab; it can't be closed until it's unpinned.
+    #[must_use]
+    pub fn pinned(mut self, is_pinned: bool) -> Self {
+        self.is_pinned = is_pinned;
+        self
+    }
+
+    /// A colour strip along the tab's bottom edge, e.g. the colour of the host it's
+    /// connected to.
+    #[must_use]
+    pub fn mark(mut self, colour: Option<Hsla>) -> Self {
+        self.mark = colour;
+        self
     }
 
     /// Draws the tab as the selected one.
@@ -109,6 +129,27 @@ impl RenderOnce for Tab {
                 d.bg(colors.tab_bar)
                     .text_color(colors.text_muted)
                     .hover(move |style| style.bg(hover))
+            })
+            .when_some(self.mark, |d, colour| {
+                d.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .h(metrics.tab_indicator)
+                        .bg(colour),
+                )
+            })
+            .when(self.is_pinned, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .size(metrics.tab_indicator * 3.)
+                        .rounded_full()
+                        .border(metrics.border_width)
+                        .border_color(colors.text_muted),
+                )
             })
             .when(self.has_indicator, |d| {
                 d.child(

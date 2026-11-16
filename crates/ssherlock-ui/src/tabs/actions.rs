@@ -21,5 +21,8 @@ actions!(
         RenameTab,
         /// Shows the hosts page, or goes back to the active tab if it's already shown.
         ShowHosts,
+        /// Pins the active tab to the front, or unpins it. A pinned tab can't be closed until
+        /// it's unpinned.
+        PinTab,
     ]
 );

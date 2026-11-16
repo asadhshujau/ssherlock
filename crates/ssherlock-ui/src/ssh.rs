@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use gpui::{App, Global};
 pub use quick_connect::{QuickConnectBar, QuickConnectEvent};
 pub use remote_terminal::RemoteTerminal;
+use ssherlock_core::{AlgorithmPreferences, Compression};
 
 /// Where SSH finds and keeps things on this machine. Set by `main` from the platform
 /// directories; tests point it at temporary ones. Without it, remote tabs explain they can't
@@ -32,6 +33,16 @@ pub struct SshEnvironment {
 }
 
 impl Global for SshEnvironment {}
+
+/// How to connect beyond where and as whom: the per-host choices a saved host resolves to
+/// (CONN-17, CONN-18). Quick connect uses the defaults.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectOptions {
+    /// Algorithms to offer; empty lists mean SSHerlock's defaults.
+    pub algorithms: AlgorithmPreferences,
+    /// Whether to compress.
+    pub compression: Compression,
+}
 
 /// Sets up the SSH feature. Its one action is handled by each pane and bound in
 /// `keymap/default.json`, so there's no app-wide state to install.

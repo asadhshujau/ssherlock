@@ -5,6 +5,7 @@
 //! background thread; changes run one at a time, in the order they were asked for, and each
 //! ends by reloading, so the copy always matches the database. Failures become toasts.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -54,6 +55,8 @@ pub struct HostsModel {
     data: Snapshot,
     /// The last queued store operation; the next one waits for it.
     queue: Option<Task<()>>,
+    /// Tabs open to each host right now (HOST-12). Not saved.
+    sessions: HashMap<Id<Host>, usize>,
 }
 
 struct GlobalHostsModel(Entity<HostsModel>);
@@ -124,6 +127,7 @@ impl HostsModel {
             state,
             data: Snapshot::default(),
             queue: None,
+            sessions: HashMap::new(),
         }
     }
 
@@ -150,6 +154,28 @@ impl HostsModel {
     /// The host with `id`, if it's saved.
     pub fn host(&self, id: Id<Host>) -> Option<&Host> {
         self.data.hosts.iter().find(|h| h.id == id)
+    }
+
+    /// How many tabs are open to `id`.
+    pub fn open_sessions(&self, id: Id<Host>) -> usize {
+        self.sessions.get(&id).copied().unwrap_or(0)
+    }
+
+    /// Notes that a tab to `id` opened.
+    pub fn session_opened(&mut self, id: Id<Host>, cx: &mut Context<Self>) {
+        *self.sessions.entry(id).or_default() += 1;
+        cx.notify();
+    }
+
+    /// Notes that a tab to `id` closed.
+    pub fn session_closed(&mut self, id: Id<Host>, cx: &mut Context<Self>) {
+        if let Some(count) = self.sessions.get_mut(&id) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.sessions.remove(&id);
+            }
+            cx.notify();
+        }
     }
 
     /// Saves `hosts` (new or edited), all or nothing.

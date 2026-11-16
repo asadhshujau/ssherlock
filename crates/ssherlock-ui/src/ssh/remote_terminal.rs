@@ -19,7 +19,7 @@ use ssherlock_terminal::{PtyExit, PtyIo, PtyOutput, TerminalSize};
 use tokio::sync::mpsc;
 
 use super::dialogs::{KeyRow, host_key_text, login_text};
-use super::{SshEnvironment, status};
+use super::{ConnectOptions, SshEnvironment, status};
 use crate::components::{InputKind, Modal, ModalEvent, TextInput, TextInputEvent};
 use crate::runtime::TokioHandle;
 use crate::terminal::{TerminalView, TerminalViewEvent, mono_family};
@@ -87,9 +87,14 @@ impl Focusable for RemoteTerminal {
 }
 
 impl RemoteTerminal {
-    /// Connects to `target` and shows its shell. Missing parts come from the
+    /// Connects to `target` with `options` and shows its shell. Missing parts come from the
     /// [`SshEnvironment`]: the local user name, port 22, the default key files.
-    pub fn new(target: &ConnectTarget, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        target: &ConnectTarget,
+        options: &ConnectOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let env = cx.try_global::<SshEnvironment>().cloned();
         let tokio = cx.try_global::<TokioHandle>().map(|t| t.handle().clone());
         let user = target
@@ -105,7 +110,10 @@ impl RemoteTerminal {
 
         let (pty, events, failure) = match (env, tokio, user) {
             (Some(env), Some(tokio), Some(user)) => {
-                let connect = ConnectConfig::new(target.address.to_string(), user).with_port(port);
+                let connect = ConnectConfig::new(target.address.to_string(), user)
+                    .with_port(port)
+                    .with_algorithms(options.algorithms.clone())
+                    .with_compression(options.compression);
                 let key_files = env
                     .ssh_dir
                     .as_deref()

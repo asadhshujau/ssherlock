@@ -151,6 +151,19 @@
     }
   },
   {
+    "context": "QuickConnect",
+    "bindings": {
+      "down": "menu::SelectNext",
+      "up": "menu::SelectPrevious"
+    }
+  },
+  {
+    "context": "Pane",
+    "bindings": {
+      "mod-alt-p": "pane::PinTab"
+    }
+  },
+  {
     "context": "Modal",
     "bindings": {
       "enter": "modal::Confirm",

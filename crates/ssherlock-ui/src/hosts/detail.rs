@@ -25,17 +25,25 @@ pub struct CaseFile {
     pub created_at: Timestamp,
     /// When it was last connected to.
     pub last_connected_at: Option<Timestamp>,
+    /// How many tabs are open to it.
+    pub open_sessions: usize,
 }
 
 impl CaseFile {
     /// The case file of `host`.
-    pub fn new(host: &Host, summary: HostSummary, group: Option<String>) -> Self {
+    pub fn new(
+        host: &Host,
+        summary: HostSummary,
+        group: Option<String>,
+        open_sessions: usize,
+    ) -> Self {
         Self {
             summary,
             group,
             notes: host.notes.clone(),
             created_at: host.created_at,
             last_connected_at: host.last_connected_at,
+            open_sessions,
         }
     }
 }
@@ -108,6 +116,13 @@ pub fn case_file(
                     )
                     .child(tag_chips(theme, &file.summary.tags)),
             )
+        })
+        .when(file.open_sessions > 0, |d| {
+            let tabs = match file.open_sessions {
+                1 => "1 tab".to_owned(),
+                n => format!("{n} tabs"),
+            };
+            d.child(row("Open now", tabs.into()))
         })
         .child(row("Last connected", last.into()))
         .child(row("Created", time::ago(file.created_at, now).into()))
