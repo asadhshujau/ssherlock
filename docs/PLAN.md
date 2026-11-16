@@ -74,7 +74,7 @@ Progress (update in the PR that changes a phase's status):
 | 0 — Foundations | done (window checked by hand on GNOME Wayland; macOS by CI) |
 | 1 — Terminal core | done (exit check on GNOME Wayland and Xvfb; macOS by CI). TERM-05, 10, 11, 12, 13 have leftovers noted in FEATURES.md |
 | 2 — SSH core | done (exit check against the Docker test server; real servers checked by hand; CI on Linux and macOS). CONN-17, 18, 23 have leftovers noted in FEATURES.md |
-| 3 — Hosts, groups & storage | not started |
+| 3 — Hosts, groups & storage | in progress |
 | 4 – 14 | not started |
 
 ---

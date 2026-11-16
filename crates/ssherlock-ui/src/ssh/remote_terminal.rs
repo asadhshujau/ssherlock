@@ -96,7 +96,7 @@ impl RemoteTerminal {
             .user
             .clone()
             .or_else(|| env.as_ref().and_then(|env| env.local_user.clone()));
-        let port = target.port.unwrap_or(DEFAULT_PORT);
+        let port = target.port.map_or(DEFAULT_PORT, ssherlock_core::Port::get);
         let label = match &user {
             Some(user) => format!("{user}@{}", host_label(target, port)),
             None => host_label(target, port),

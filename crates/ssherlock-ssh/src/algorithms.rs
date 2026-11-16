@@ -1,39 +1,16 @@
 //! Which algorithms a connection offers, and whether it compresses (CONN-17, CONN-18).
 //!
-//! **Service** layer. Preferences are OpenSSH algorithm names (`aes256-gcm@openssh.com`,
-//! `curve25519-sha256`), so per-host settings can store them as text and the user can type what
-//! a server's documentation says. An empty list means SSHerlock's safe defaults.
+//! **Service** layer. The choices themselves ([`AlgorithmPreferences`], [`Compression`]) are
+//! model types in `ssherlock-core`, so saved hosts can store them; this module checks the names
+//! and turns them into russh's preference lists. An empty list means SSHerlock's safe defaults.
 
 use std::borrow::Cow;
 
 use russh::keys::Algorithm;
 use russh::{Preferred, cipher, compression, kex, mac};
+pub use ssherlock_core::algorithms::{AlgorithmPreferences, Compression};
 
 use crate::SshError;
-
-/// Algorithms to offer, most preferred first. Empty lists keep the defaults.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AlgorithmPreferences {
-    /// Key exchange, e.g. `curve25519-sha256`.
-    pub kex: Vec<String>,
-    /// Host key types the server may prove itself with, e.g. `ssh-ed25519`, `rsa-sha2-512`.
-    pub host_key: Vec<String>,
-    /// Ciphers, e.g. `chacha20-poly1305@openssh.com`.
-    pub cipher: Vec<String>,
-    /// MACs, e.g. `hmac-sha2-256-etm@openssh.com` (unused with AEAD ciphers).
-    pub mac: Vec<String>,
-}
-
-/// Whether to compress the connection. Worth it only on slow links; off by default, as in
-/// OpenSSH.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Compression {
-    /// No compression.
-    #[default]
-    Off,
-    /// zlib, started after login as OpenSSH does.
-    On,
-}
 
 /// Kex names that aren't algorithms but tell the server what we support: server-sig-algs
 /// extension info, and strict key exchange (the Terrapin fix). Always offered.
@@ -42,58 +19,61 @@ const KEX_MARKERS: [kex::Name; 2] = [
     kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
 ];
 
-impl AlgorithmPreferences {
-    /// Checks every name is one SSHerlock supports, so a settings form can refuse a typo
-    /// before connecting.
-    ///
-    /// # Errors
-    ///
-    /// [`SshError::UnknownAlgorithm`] naming the first unsupported entry.
-    pub fn validate(&self) -> Result<(), SshError> {
-        self.to_preferred(Compression::Off).map(|_| ())
-    }
+/// Checks every name in `preferences` is one SSHerlock supports, so a settings form can refuse a
+/// typo before connecting.
+///
+/// # Errors
+///
+/// [`SshError::UnknownAlgorithm`] naming the first unsupported entry.
+pub fn validate(preferences: &AlgorithmPreferences) -> Result<(), SshError> {
+    to_preferred(preferences, Compression::Off).map(|_| ())
+}
 
-    /// russh's preference lists for these choices.
-    pub(crate) fn to_preferred(&self, compression: Compression) -> Result<Preferred, SshError> {
-        let mut preferred = Preferred::default();
-        if !self.kex.is_empty() {
-            // russh's name lookup doesn't know the markers, so a list that names them is
-            // matched here; they're moved to the end below either way.
-            let mut names = parse("key exchange", &self.kex, |n| {
-                KEX_MARKERS
-                    .into_iter()
-                    .find(|marker| marker.as_ref() == n)
-                    .or_else(|| kex::Name::try_from(n).ok())
-            })?;
-            names.retain(|name| !KEX_MARKERS.contains(name));
-            names.extend(KEX_MARKERS);
-            preferred.kex = Cow::Owned(names);
-        }
-        if !self.host_key.is_empty() {
-            preferred.key = Cow::Owned(parse("host key", &self.host_key, |n| {
-                Algorithm::new(n).ok()
-            })?);
-        }
-        if !self.cipher.is_empty() {
-            preferred.cipher = Cow::Owned(parse("cipher", &self.cipher, |n| {
-                cipher::Name::try_from(n).ok()
-            })?);
-        }
-        if !self.mac.is_empty() {
-            preferred.mac = Cow::Owned(parse("MAC", &self.mac, |n| mac::Name::try_from(n).ok())?);
-        }
-        preferred.compression = Cow::Borrowed(match compression {
-            Compression::Off => &[compression::NONE],
-            // zlib@openssh.com first: it only starts after login, so nothing about the
-            // credentials is compressed (no CRIME-style length leaks).
-            Compression::On => &[
-                compression::ZLIB_LEGACY,
-                compression::ZLIB,
-                compression::NONE,
-            ],
-        });
-        Ok(preferred)
+/// russh's preference lists for these choices.
+pub(crate) fn to_preferred(
+    preferences: &AlgorithmPreferences,
+    compression: Compression,
+) -> Result<Preferred, SshError> {
+    let mut preferred = Preferred::default();
+    if !preferences.kex.is_empty() {
+        // russh's name lookup doesn't know the markers, so a list that names them is
+        // matched here; they're moved to the end below either way.
+        let mut names = parse("key exchange", &preferences.kex, |n| {
+            KEX_MARKERS
+                .into_iter()
+                .find(|marker| marker.as_ref() == n)
+                .or_else(|| kex::Name::try_from(n).ok())
+        })?;
+        names.retain(|name| !KEX_MARKERS.contains(name));
+        names.extend(KEX_MARKERS);
+        preferred.kex = Cow::Owned(names);
     }
+    if !preferences.host_key.is_empty() {
+        preferred.key = Cow::Owned(parse("host key", &preferences.host_key, |n| {
+            Algorithm::new(n).ok()
+        })?);
+    }
+    if !preferences.cipher.is_empty() {
+        preferred.cipher = Cow::Owned(parse("cipher", &preferences.cipher, |n| {
+            cipher::Name::try_from(n).ok()
+        })?);
+    }
+    if !preferences.mac.is_empty() {
+        preferred.mac = Cow::Owned(parse("MAC", &preferences.mac, |n| {
+            mac::Name::try_from(n).ok()
+        })?);
+    }
+    preferred.compression = Cow::Borrowed(match compression {
+        Compression::Off => &[compression::NONE],
+        // zlib@openssh.com first: it only starts after login, so nothing about the
+        // credentials is compressed (no CRIME-style length leaks).
+        Compression::On => &[
+            compression::ZLIB_LEGACY,
+            compression::ZLIB,
+            compression::NONE,
+        ],
+    });
+    Ok(preferred)
 }
 
 fn parse<T>(
@@ -128,9 +108,7 @@ mod tests {
 
     #[test]
     fn empty_preferences_keep_the_defaults_without_compression() {
-        let preferred = AlgorithmPreferences::default()
-            .to_preferred(Compression::Off)
-            .unwrap();
+        let preferred = to_preferred(&AlgorithmPreferences::default(), Compression::Off).unwrap();
         let default = Preferred::default();
         assert_eq!(names(&preferred.kex), names(&default.kex));
         assert_eq!(preferred.key, default.key);
@@ -149,7 +127,7 @@ mod tests {
             cipher: vec!["aes128-ctr".into()],
             mac: vec!["hmac-sha2-256".into()],
         };
-        let preferred = prefs.to_preferred(Compression::On).unwrap();
+        let preferred = to_preferred(&prefs, Compression::On).unwrap();
         assert_eq!(
             names(&preferred.kex),
             [
@@ -182,7 +160,7 @@ mod tests {
             kex: vec!["ext-info-c".into(), "curve25519-sha256".into()],
             ..AlgorithmPreferences::default()
         };
-        let preferred = prefs.to_preferred(Compression::Off).unwrap();
+        let preferred = to_preferred(&prefs, Compression::Off).unwrap();
         assert_eq!(
             names(&preferred.kex),
             [
@@ -229,7 +207,7 @@ mod tests {
                 "crc32",
             ),
         ] {
-            match prefs.validate() {
+            match validate(&prefs) {
                 Err(SshError::UnknownAlgorithm { kind: k, name: n }) => {
                     assert_eq!((k, n.as_str()), (kind, name));
                 }

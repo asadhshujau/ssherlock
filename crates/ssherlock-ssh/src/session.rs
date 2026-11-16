@@ -318,7 +318,7 @@ async fn handshake(
         after: config.connect_timeout,
     };
     // Checked before any network traffic, so a typo in a preference fails at once.
-    let preferred = config.algorithms.to_preferred(config.compression)?;
+    let preferred = crate::algorithms::to_preferred(&config.algorithms, config.compression)?;
     let deadline = Instant::now() + config.connect_timeout;
 
     let stream = tokio::time::timeout_at(

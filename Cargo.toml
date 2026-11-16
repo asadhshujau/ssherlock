@@ -43,6 +43,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing-appender = "0.2.5"
 # Platform data, config and cache directories.
 directories = "6.0.0"
+# Timestamps on models: RFC 3339 UTC text in SQLite, relative times in the UI.
+jiff = { version = "0.2.46", default-features = false, features = ["std", "serde"] }
 # Id<T> is a UUID v7.
 uuid = { version = "1.29", features = ["v7", "serde"] }
 # Serialisation for models, settings, import and export.
