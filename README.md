@@ -4,17 +4,28 @@ A Rust SSH client. Hosts, keys, port forwarding, snippets, SFTP, sync — everyt
 SSH client should do, with no paid tier. Built with [gpui](https://crates.io/crates/gpui) and
 [russh](https://crates.io/crates/russh).
 
-> **Status: early development (Phase 2 done, Phase 3 next).** SSHerlock runs local terminals in
-> tabs and connects to SSH servers you type in. There are no saved hosts yet; those come in
-> Phase 3. Follow [docs/PLAN.md](docs/PLAN.md) for the build order and
-> [docs/FEATURES.md](docs/FEATURES.md) for the full checklist.
+> **Status: early development (Phase 3 done, Phase 4 next).** SSHerlock runs local terminals in
+> tabs, keeps saved hosts in nested groups, and connects to them or to servers you type in.
+> Saved keys and passwords come with the keychain in Phase 4. Follow
+> [docs/PLAN.md](docs/PLAN.md) for the build order and [docs/FEATURES.md](docs/FEATURES.md) for
+> the full checklist.
 
 ## What works today
 
 - **Local terminals** in tabs: rename, reorder, search the scrollback, copy and paste, open
   links, zoom.
-- **SSH via quick connect.** Type `user@host`, `user@host:port` or `ssh://user@host:port`. If you
-  leave out the user, your local user name is used.
+- **Saved hosts** on the **Hosts** tab, in front of the terminal tabs. Group them (groups nest,
+  and a host inherits the port, user, colour, algorithms and compression of its groups unless it
+  sets its own), tag them, star favourites, and search as you type. Sort by name, last use or
+  creation, in a list or a grid. Select several to connect to all of them, edit them together or
+  move them to a group. Deleted hosts and groups go to the trash, where they can be restored.
+  The whole page works from the keyboard: arrows, Shift to select, Enter to connect, N new
+  host, E edit, F favourite, Delete to trash, / to search, Tab between the parts.
+- **SSH via quick connect.** Type `user@host`, `user@host:port` or `ssh://user@host:port`, or part
+  of a saved host's name: matching saved hosts are listed, and Enter connects to the first one.
+  If you leave out the user, your local user name is used.
+- **Tabs** opened from a saved host carry its colour. Pin a tab to keep it at the front; a
+  pinned tab can't be closed until it's unpinned.
 - **Login:** your SSH agent first, then `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa` (asking for
   a passphrase if a key needs one), then password, then keyboard-interactive (2FA, PAM).
 - **Host keys:** a new host shows its SHA-256 fingerprint and randomart before you trust it. A
@@ -27,6 +38,8 @@ SSH client should do, with no paid tier. Built with [gpui](https://crates.io/cra
 | Shortcut | macOS | Linux |
 |----------|-------|-------|
 | Quick connect | Cmd+O | Ctrl+Shift+O |
+| Hosts page | Cmd+Shift+H | Ctrl+Shift+H |
+| Pin / unpin tab | Cmd+Alt+P | Ctrl+Shift+Alt+P |
 | New tab / close tab | Cmd+T / Cmd+W | Ctrl+Shift+T / Ctrl+Shift+W |
 | Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab | Ctrl+Tab / Ctrl+Shift+Tab |
 | Rename tab | Cmd+R | Ctrl+Shift+R |
@@ -38,7 +51,8 @@ On Linux the shortcuts add Shift so plain Ctrl keys still reach the shell. All o
 [keymap/default.json](crates/ssherlock-ui/src/keymap/default.json). Right-click in a terminal
 for copy, paste, find, clear scrollback and reset.
 
-SSHerlock keeps its `known_hosts` and its logs in its data folder:
+SSHerlock keeps its database of saved hosts (`ssherlock.db`), its `known_hosts` and its logs in
+its data folder:
 `~/.local/share/ssherlock/` on Linux, `~/Library/Application Support/io.github.asadhshujau.SSHerlock/`
 on macOS.
 
