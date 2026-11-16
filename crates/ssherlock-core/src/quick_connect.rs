@@ -1,12 +1,13 @@
 //! Parsing what the user types in the quick connect bar: `host`, `user@host`, `host:port`,
 //! `user@[2001:db8::1]:2222` or an `ssh://user@host:port` URL.
 //!
-//! **Model** layer: pure, total, table-tested. Matching saved hosts (the other half of CONN-23)
-//! arrives with saved hosts in Phase 3.
+//! **Model** layer: pure, total, table-tested. Matching saved hosts, the other half of CONN-23,
+//! is [`hosts::search::rank`](crate::hosts::search::rank).
 
 use std::fmt;
 
 use crate::address::{Address, AddressError};
+use crate::port::Port;
 
 /// Where the quick connect bar says to connect. Missing parts fall back to defaults chosen by the
 /// caller (port 22, the local user name).
@@ -17,7 +18,7 @@ pub struct ConnectTarget {
     /// The server.
     pub address: Address,
     /// The port, if given.
-    pub port: Option<u16>,
+    pub port: Option<Port>,
 }
 
 /// Why the quick connect text can't be used.
@@ -143,11 +144,9 @@ fn split_host_port(text: &str) -> Result<(&str, Option<&str>), QuickConnectError
     }
 }
 
-fn parse_port(text: &str) -> Result<u16, QuickConnectError> {
-    match text.parse::<u16>() {
-        Ok(port) if port != 0 => Ok(port),
-        _ => Err(QuickConnectError::InvalidPort(text.to_owned())),
-    }
+fn parse_port(text: &str) -> Result<Port, QuickConnectError> {
+    text.parse()
+        .map_err(|_| QuickConnectError::InvalidPort(text.to_owned()))
 }
 
 /// Decodes `%XX` escapes (URL user names may escape `@` or `;`). Invalid escapes are kept as-is.
@@ -184,7 +183,7 @@ mod tests {
         ConnectTarget {
             user: user.map(str::to_owned),
             address: host.parse().unwrap(),
-            port,
+            port: port.map(|p| Port::new(p).unwrap()),
         }
     }
 
@@ -315,6 +314,7 @@ mod tests {
             host in "[a-z][a-z0-9-]{0,10}(\\.[a-z]{2,5})?",
             port in proptest::option::of(1u16..),
         ) {
+            let port = port.and_then(Port::new);
             let target = ConnectTarget { user, address: host.parse().unwrap(), port };
             proptest::prop_assert_eq!(ConnectTarget::parse(&target.to_string()), Ok(target));
         }

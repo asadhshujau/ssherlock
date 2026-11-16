@@ -9,12 +9,20 @@
 #![forbid(unsafe_code)]
 
 pub mod address;
+pub mod algorithms;
 pub mod app;
+pub mod hosts;
 pub mod id;
+pub mod port;
 pub mod quick_connect;
 pub mod secret;
+pub mod time;
+pub mod trash;
 
 pub use address::{Address, AddressError};
+pub use algorithms::{AlgorithmPreferences, Compression};
 pub use id::{Id, IdError};
+pub use port::{Port, PortError};
 pub use quick_connect::{ConnectTarget, QuickConnectError};
 pub use secret::{ExposeSecret, SecretBox, SecretString};
+pub use time::Timestamp;
