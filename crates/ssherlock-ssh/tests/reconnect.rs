@@ -60,7 +60,7 @@ fn start(server_port: u16, test: &str) -> (PtyIo, mpsc::UnboundedReceiver<Connec
             }
         }
     });
-    let io = spawn_shell(
+    let (io, _requests) = spawn_shell(
         config,
         host_keys,
         TerminalSize::new(80, 24),

@@ -177,6 +177,10 @@ pub enum SshError {
         output: String,
     },
 
+    /// The connection a request needed has ended.
+    #[error("the connection is not open")]
+    NotConnected,
+
     /// A channel closed before it was ready.
     #[error("the server closed the channel")]
     ChannelClosed,

@@ -36,7 +36,7 @@ use crate::components::form::{FocusNext, FocusPrevious};
 use crate::components::{
     Button, ButtonStyle, Picker, PickerEvent, PickerItem, TextInput, TextInputEvent,
 };
-use crate::keychain::{IdentityList, KeyList};
+use crate::keychain::{IdentityList, KeyList, KeyListEvent};
 use crate::ssh::SshEnvironment;
 use crate::theme::{ActiveTheme as _, Theme};
 
@@ -48,6 +48,13 @@ const RECENT_STRIP: usize = 5;
 pub enum HostListEvent {
     /// Open a tab connected to each of these, in order.
     Connect(Vec<ConnectRequest>),
+    /// Open a tab connected to this host and add `key` to its `authorized_keys` (KEY-07).
+    ExportKey {
+        /// The host to connect to (boxed: it's far larger than the other variant).
+        request: Box<ConnectRequest>,
+        /// The key to add.
+        key: ssherlock_core::Id<ssherlock_core::keychain::Key>,
+    },
 }
 
 /// The hosts page.
@@ -104,6 +111,17 @@ impl HostList {
             // The keychain pages' dialogs are drawn over the whole page, so it redraws with them.
             cx.observe(&keys, |_, _, cx| cx.notify()),
             cx.observe(&identities, |_, _, cx| cx.notify()),
+            cx.subscribe(&keys, |list, _, event: &KeyListEvent, cx| {
+                let KeyListEvent::ExportToHost { key, host } = event;
+                let model = list.model.read(cx);
+                if let Some(saved) = model.host(*host) {
+                    let request = ConnectRequest::new(saved, model.groups(), model.identities());
+                    cx.emit(HostListEvent::ExportKey {
+                        request: Box::new(request),
+                        key: *key,
+                    });
+                }
+            }),
             cx.observe(&model, |list, _, cx| list.refresh(cx)),
             cx.subscribe(&search, |list, _, event: &TextInputEvent, cx| {
                 if let TextInputEvent::Changed(_) = event {
@@ -1230,7 +1248,7 @@ fn message(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -1359,6 +1377,34 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(f.model.read_with(cx, |m, _| m.keys().len()), 0);
+    }
+
+    #[gpui::test]
+    fn exporting_a_key_to_a_host_asks_the_pane_to_connect_and_add_it(cx: &mut TestAppContext) {
+        let web = host("web", "web.example.com");
+        let db = host("db", "db.example.com");
+        let (f, cx) = page(&[web, db.clone()], &[], cx);
+        f.list.update(cx, |list, cx| list.show(Section::Keys, cx));
+        f.list.update_in(cx, |list, window, cx| {
+            list.focus_list(&FocusList, window, cx);
+        });
+        cx.simulate_keystrokes("n");
+        cx.simulate_input("Deploy");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let key = f.model.read_with(cx, |m, _| m.keys().first().unwrap().id);
+
+        // `h` lists the hosts by name; typing filters, Enter picks.
+        cx.simulate_keystrokes("h");
+        cx.simulate_input("db");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let events = f.events.take();
+        let [HostListEvent::ExportKey { request, key: sent }] = events.as_slice() else {
+            panic!("expected one ExportKey event, got {events:?}");
+        };
+        assert_eq!((request.host, *sent), (db.id, key));
+        assert_eq!(request.target.address.to_string(), "db.example.com");
     }
 
     #[gpui::test]

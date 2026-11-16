@@ -109,7 +109,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [x] **KEY-04** Generate keys: Ed25519, ECDSA P-256/384/521, RSA 2048–4096, with passphrase (Free)
 - [x] **KEY-05** Import keys from file, clipboard, `~/.ssh` scan (Free)
 - [x] **KEY-06** Export keys: OpenSSH, PEM/PKCS#8, public key only (Free)
-- [ ] **KEY-07** Export public key to host (`ssh-copy-id` equivalent) (Free)
+- [x] **KEY-07** Export public key to host (`ssh-copy-id` equivalent) (Free)
 - [ ] **KEY-08** OpenSSH certificates stored alongside keys (Pro)
 - [ ] **KEY-09** FIDO2 key enrolment and use (Pro)
 - [ ] **KEY-10** Built-in SSH agent (serve keys to other apps) (Pro)

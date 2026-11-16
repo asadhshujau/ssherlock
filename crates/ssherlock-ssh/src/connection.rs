@@ -2,7 +2,8 @@
 //! connection with keep-alives, and reconnect with backoff when it dies.
 //!
 //! **Service** layer. [`spawn_shell`] returns a [`PtyIo`] at once and does everything else in a
-//! background task, reporting progress as [`SessionEvent::State`]. The terminal keeps the same
+//! background task, reporting progress as [`SessionEvent::State`]. Its [`ShellHandle`] asks
+//! that task for work on the same connection, such as adding a key to `authorized_keys`. The terminal keeps the same
 //! `PtyIo` across reconnects; each reconnect opens a fresh shell into it. The task ends, closing
 //! the connection, when the shell exits, the connection can't be restored, or the `PtyIo` is
 //! dropped (the tab closed).
@@ -11,11 +12,12 @@ use std::error::Error as _;
 use std::time::Duration;
 
 use ssherlock_terminal::{PtyExit, PtyIo, PtyOutput, PtyPeer, TerminalSize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 use crate::SshError;
 use crate::auth::{AuthMethod, PassphraseCache};
+use crate::authorized_keys::KeyInstall;
 use crate::host_keys::HostKeys;
 use crate::session::{ConnectConfig, Session, SessionEvent};
 use crate::shell::{OpenShell, ShellEnd, bridge};
@@ -147,7 +149,49 @@ pub enum DisconnectReason {
     },
 }
 
-/// Starts a remote shell for a terminal of `size` and returns the terminal's end of it.
+/// Requests waiting for a connection to handle: one at a time from a user's action, so a small
+/// buffer is plenty; a full one makes the sender wait.
+const REQUEST_CAPACITY: usize = 4;
+
+/// Asks a running [`spawn_shell`] connection for work on the server beside the shell. Requests
+/// wait while it's connecting or reconnecting and run once it's connected; they fail with
+/// [`SshError::NotConnected`] if the connection ends first.
+#[derive(Clone, Debug)]
+pub struct ShellHandle {
+    requests: mpsc::Sender<ShellRequest>,
+}
+
+#[derive(Debug)]
+enum ShellRequest {
+    InstallKey {
+        public_line: String,
+        reply: oneshot::Sender<Result<KeyInstall, SshError>>,
+    },
+}
+
+impl ShellHandle {
+    /// Adds `public_line` to the logged-in user's `authorized_keys` over this connection (see
+    /// [`Session::install_public_key`]).
+    ///
+    /// # Errors
+    ///
+    /// [`SshError::NotConnected`] if the connection ended before it could be done, or what
+    /// [`Session::install_public_key`] reports.
+    pub async fn install_public_key(&self, public_line: &str) -> Result<KeyInstall, SshError> {
+        let (reply, answer) = oneshot::channel();
+        self.requests
+            .send(ShellRequest::InstallKey {
+                public_line: public_line.to_owned(),
+                reply,
+            })
+            .await
+            .map_err(|_| SshError::NotConnected)?;
+        answer.await.map_err(|_| SshError::NotConnected)?
+    }
+}
+
+/// Starts a remote shell for a terminal of `size` and returns the terminal's end of it, with a
+/// handle for asking the same connection to do more.
 ///
 /// Progress and questions (host key, passwords) arrive on `events`. The first connection isn't
 /// retried: if it fails, the user is better served by the error than by a wait. Once a shell has
@@ -158,8 +202,9 @@ pub fn spawn_shell(
     size: TerminalSize,
     events: mpsc::Sender<SessionEvent>,
     runtime: &tokio::runtime::Handle,
-) -> PtyIo {
+) -> (PtyIo, ShellHandle) {
     let (io, peer) = PtyIo::pair();
+    let (requests, receiver) = mpsc::channel(REQUEST_CAPACITY);
     let span = tracing::info_span!("remote_shell", host = %config.connect.host(), port = config.connect.port());
     let supervisor = Supervisor {
         config,
@@ -167,9 +212,10 @@ pub fn spawn_shell(
         size,
         events,
         peer,
+        requests: receiver,
     };
     runtime.spawn(tracing::Instrument::instrument(supervisor.run(), span));
-    io
+    (io, ShellHandle { requests })
 }
 
 struct Supervisor {
@@ -178,6 +224,7 @@ struct Supervisor {
     size: TerminalSize,
     events: mpsc::Sender<SessionEvent>,
     peer: PtyPeer,
+    requests: mpsc::Receiver<ShellRequest>,
 }
 
 /// What ended one connected stretch.
@@ -268,11 +315,19 @@ impl Supervisor {
                 size,
                 config,
                 events,
+                requests,
                 ..
             } = self;
-            tokio::select! {
-                end = bridge(shell, peer, size) => Some(end),
-                () = heartbeat(session, config.keep_alive, events) => None,
+            let bridge = bridge(shell, peer, size);
+            let heartbeat = heartbeat(session, config.keep_alive, events);
+            tokio::pin!(bridge, heartbeat);
+            loop {
+                tokio::select! {
+                    end = &mut bridge => break Some(end),
+                    () = &mut heartbeat => break None,
+                    // Handled in turn: the shell's output waits the moment a request takes.
+                    Some(request) = requests.recv() => handle(session, request).await,
+                }
             }
         };
         match end {
@@ -320,6 +375,19 @@ impl Supervisor {
         if self.events.send(SessionEvent::State(state)).await.is_err() {
             // The UI stopped listening; the PtyIo closing will end this task too.
             tracing::debug!("connection state not delivered: no listener");
+        }
+    }
+}
+
+/// Does what `request` asks over `session` and sends back the outcome.
+async fn handle(session: &Session, request: ShellRequest) {
+    match request {
+        ShellRequest::InstallKey { public_line, reply } => {
+            let outcome = session.install_public_key(&public_line).await;
+            if reply.send(outcome).is_err() {
+                // The asker gave up (its tab closed); the key was still added.
+                tracing::debug!("key install finished after its requester left");
+            }
         }
     }
 }

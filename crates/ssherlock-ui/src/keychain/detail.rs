@@ -26,11 +26,13 @@ pub struct KeyFacts {
 }
 
 /// Handlers for the panel's buttons.
-pub struct KeyButtons<C, X, E, D> {
+pub struct KeyButtons<C, X, H, E, D> {
     /// Copy public key.
     pub on_copy: C,
     /// Export.
     pub on_export: X,
+    /// Export to host.
+    pub on_export_to_host: H,
     /// Edit.
     pub on_edit: E,
     /// Delete.
@@ -77,6 +79,7 @@ pub fn key_panel(
     mono: &SharedString,
     now: Timestamp,
     buttons: KeyButtons<
+        impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
         impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
         impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
         impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -184,6 +187,10 @@ pub fn key_panel(
                         .on_click(buttons.on_copy),
                 )
                 .child(Button::new("key-export", "Export\u{2026}").on_click(buttons.on_export))
+                .child(
+                    Button::new("key-export-host", "Export to host\u{2026}")
+                        .on_click(buttons.on_export_to_host),
+                )
                 .child(Button::new("key-edit", "Edit").on_click(buttons.on_edit))
                 .child(
                     Button::new("key-delete", "Delete")

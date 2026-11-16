@@ -117,6 +117,7 @@
       "f2": "keychain::EditKey",
       "x": "keychain::ExportKey",
       "c": "keychain::CopyPublicKey",
+      "h": "keychain::ExportKeyToHost",
       "secondary-c": "keychain::CopyPublicKey",
       "delete": "keychain::DeleteKey",
       "backspace": "keychain::DeleteKey"
@@ -201,6 +202,12 @@
     "os": ["linux", "windows"],
     "bindings": {
       "ctrl-shift-delete": "terminal::ResetTerminal"
+    }
+  },
+  {
+    "context": "RemoteTerminal",
+    "bindings": {
+      "mod-alt-k": "ssh::ExportKeyHere"
     }
   },
   {

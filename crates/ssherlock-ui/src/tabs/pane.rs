@@ -202,27 +202,38 @@ impl Pane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let HostListEvent::Connect(requests) = event;
-        for request in requests {
-            self.open_saved_host(request, window, cx);
+        match event {
+            HostListEvent::Connect(requests) => {
+                for request in requests {
+                    self.open_saved_host(request, window, cx);
+                }
+            }
+            HostListEvent::ExportKey { request, key } => {
+                let view = self.open_saved_host(request, window, cx);
+                let key = HostsModel::global(cx).and_then(|m| m.read(cx).key(*key).cloned());
+                if let Some(key) = key {
+                    view.update(cx, |view, cx| view.install_key(&key, cx));
+                }
+            }
         }
     }
 
     /// Opens a tab connected to a saved host, marked with its colour, and notes the connection
-    /// for Recents and the host's open sessions.
+    /// for Recents and the host's open sessions. Returns the tab's terminal.
     pub fn open_saved_host(
         &mut self,
         request: &ConnectRequest,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        self.open_remote(&request.target, &request.options, Some(request), window, cx);
+    ) -> Entity<RemoteTerminal> {
+        let view = self.open_remote(&request.target, &request.options, Some(request), window, cx);
         if let Some(model) = HostsModel::global(cx) {
             model.update(cx, |model, cx| {
                 model.record_connection(request.host, cx);
                 model.session_opened(request.host, cx);
             });
         }
+        view
     }
 
     /// Number of open tabs.
@@ -260,12 +271,19 @@ impl Pane {
         saved: Option<&ConnectRequest>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Entity<RemoteTerminal> {
         let view = cx.new(|cx| RemoteTerminal::new(target, options, window, cx));
         let subscription = cx.subscribe_in(&view, window, |pane, view, event, window, cx| {
             pane.terminal_event(view.entity_id(), event, window, cx);
         });
-        self.add_tab(TabView::Remote(view), subscription, saved, window, cx);
+        self.add_tab(
+            TabView::Remote(view.clone()),
+            subscription,
+            saved,
+            window,
+            cx,
+        );
+        view
     }
 
     fn add_tab(

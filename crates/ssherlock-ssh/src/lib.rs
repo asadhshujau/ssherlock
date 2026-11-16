@@ -17,7 +17,7 @@ mod shell;
 pub use algorithms::{AlgorithmPreferences, Compression};
 pub use auth::{AgentSocket, AuthMethod, PassphraseCache, StoredKey};
 pub use authorized_keys::KeyInstall;
-pub use connection::{ConnectionState, RemoteShellConfig, spawn_shell};
+pub use connection::{ConnectionState, RemoteShellConfig, ShellHandle, spawn_shell};
 pub use error::SshError;
 pub use host_keys::HostKeys;
 /// The SSH public key type used throughout this crate's API.
