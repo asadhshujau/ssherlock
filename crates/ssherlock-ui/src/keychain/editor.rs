@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Task, Window, div,
+    SharedString, Styled as _, Task, Window, div,
 };
 use ssherlock_core::keychain::{Key, KeyKind, KeyProtection};
 use ssherlock_core::{ExposeSecret as _, Id, SecretString, Timestamp};

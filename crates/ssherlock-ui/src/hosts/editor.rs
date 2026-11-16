@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Subscription, Window,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Subscription,
+    Window,
 };
 use ssherlock_core::hosts::{
     BulkEdit, Change, Colour, EffectiveSettings, Group, GroupError, GroupTree, Host, HostError,
@@ -86,6 +86,7 @@ enum Field {
     HostKey,
     Cipher,
     Mac,
+    Password,
 }
 
 /// The text fields. Some are unused in some modes.
@@ -103,6 +104,23 @@ struct Inputs {
     host_key: Entity<TextInput>,
     cipher: Entity<TextInput>,
     mac: Entity<TextInput>,
+    /// A new password to save; empty keeps the saved one (or none).
+    password: Entity<TextInput>,
+}
+
+/// One row of a credential picker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Credential {
+    Inherit,
+    Identity(Id<Identity>),
+    Key(Id<Key>),
+}
+
+/// Which credential picker is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CredentialChoice {
+    Identity,
+    Key,
 }
 
 /// The credential settings a host or group picks.
@@ -122,9 +140,12 @@ pub struct HostEditor {
     group: Change<Option<Id<Group>>>,
     colour: Change<Option<Colour>>,
     compression: Option<Compression>,
-    /// The identity, key and saved password, carried through unchanged until the editor gets
-    /// fields for them.
+    /// The identity, key and saved password the host or group picks itself.
     credentials: Credentials,
+    forget_password: bool,
+    identity_focus: FocusHandle,
+    key_focus: FocusHandle,
+    forget_focus: FocusHandle,
     is_favourite: Change<bool>,
     errors: HashMap<Field, SharedString>,
     group_focus: FocusHandle,
@@ -194,6 +215,7 @@ impl HostEditor {
             host_key: field(fields::format_algorithms(&algorithms.host_key), cx),
             cipher: field(fields::format_algorithms(&algorithms.cipher), cx),
             mac: field(fields::format_algorithms(&algorithms.mac), cx),
+            password: cx.new(|cx| TextInput::field("", cx).secret()),
         };
         let (group, colour, is_favourite) = match &mode {
             EditorMode::NewHost { group } => {
@@ -229,6 +251,10 @@ impl HostEditor {
             model,
             compression: settings.compression,
             credentials,
+            forget_password: false,
+            identity_focus: cx.focus_handle().tab_stop(true),
+            key_focus: cx.focus_handle().tab_stop(true),
+            forget_focus: cx.focus_handle().tab_stop(true),
             mode,
             inputs,
             group,
@@ -308,15 +334,34 @@ impl HostEditor {
                 let local = cx
                     .try_global::<SshEnvironment>()
                     .and_then(|env| env.local_user.clone());
-                let user = match &inherited.username {
-                    Resolved {
-                        value: Some(user),
-                        source,
-                    } => format!("{user} ({})", from(*source)),
-                    Resolved { value: None, .. } => match local {
+                let own_identity = self.credentials.identity.and_then(|id| model.identity(id));
+                let user = match (&inherited.username, own_identity) {
+                    (_, Some(identity)) => {
+                        format!("{} (from identity {})", identity.username, identity.title())
+                    }
+                    (
+                        Resolved {
+                            value: Some(user),
+                            source,
+                        },
+                        None,
+                    ) => format!("{user} ({})", from(*source)),
+                    (Resolved { value: None, .. }, None) => match local {
                         Some(local) => format!("{local} (your user name)"),
                         None => "Your user name".to_owned(),
                     },
+                };
+                let password = if self.credentials.password.is_some() {
+                    "Saved; type to replace it".to_owned()
+                } else if let Some(identity) = own_identity.filter(|i| i.password.is_some()) {
+                    format!("Saved in identity {}", identity.title())
+                } else if inherited.password.value.is_some() {
+                    format!(
+                        "Inherits a saved password ({})",
+                        from(inherited.password.source)
+                    )
+                } else {
+                    "Asked for when needed".to_owned()
                 };
                 let list = |resolved: &Resolved<Vec<String>>| {
                     if resolved.value.is_empty() {
@@ -362,6 +407,7 @@ impl HostEditor {
                     ),
                     (self.inputs.cipher.clone(), Some(list(&inherited.cipher))),
                     (self.inputs.mac.clone(), Some(list(&inherited.mac))),
+                    (self.inputs.password.clone(), Some(password)),
                 ]
             }
         };
@@ -512,8 +558,139 @@ impl HostEditor {
             compression: self.compression,
             identity: self.credentials.identity,
             key: self.credentials.key,
-            password: self.credentials.password.clone(),
+            password: self.read_password(cx),
         }
+    }
+
+    /// The password to save: a typed one sealed by the vault, none if the saved one is to be
+    /// forgotten, else the one saved already.
+    fn read_password(&mut self, cx: &App) -> Option<Sealed> {
+        let typed = {
+            let input = self.inputs.password.read(cx);
+            (!input.is_empty()).then(|| input.secret_text())
+        };
+        let Some(typed) = typed else {
+            return if self.forget_password {
+                None
+            } else {
+                self.credentials.password.clone()
+            };
+        };
+        let model = self.model.read(cx);
+        let sealed = match model.vault() {
+            Some(vault) => vault.seal_str(&typed).map_err(|e| e.to_string()),
+            None => Err(format!(
+                "the password can't be saved: {}",
+                model.vault_problem().unwrap_or_default()
+            )),
+        };
+        match sealed {
+            Ok(sealed) => Some(sealed),
+            Err(message) => {
+                self.fail(Field::Password, message);
+                self.credentials.password.clone()
+            }
+        }
+    }
+
+    /// The label of the identity or key button: the choice, or "Inherit".
+    fn credential_label(&self, choice: CredentialChoice, cx: &App) -> String {
+        let model = self.model.read(cx);
+        match choice {
+            CredentialChoice::Identity => self.credentials.identity.map(|id| {
+                model
+                    .identity(id)
+                    .map_or_else(|| "A deleted identity".to_owned(), |i| i.title().to_owned())
+            }),
+            CredentialChoice::Key => self.credentials.key.map(|id| {
+                model
+                    .key(id)
+                    .map_or_else(|| "A deleted key".to_owned(), |k| k.title().to_owned())
+            }),
+        }
+        .unwrap_or_else(|| "Inherit".to_owned())
+    }
+
+    fn open_credential_picker(
+        &mut self,
+        choice: CredentialChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let model = self.model.read(cx);
+        let inherit = (
+            Credential::Inherit,
+            "Inherit".to_owned(),
+            "Use the group's, if it has one".to_owned(),
+        );
+        let (title, current, rest): (&str, Credential, Vec<(Credential, String, String)>) =
+            match choice {
+                CredentialChoice::Identity => (
+                    "Identity",
+                    self.credentials
+                        .identity
+                        .map_or(Credential::Inherit, Credential::Identity),
+                    crate::keychain::identities::sorted(model.identities())
+                        .into_iter()
+                        .map(|i| {
+                            let row = (i.title().to_owned(), i.username.clone());
+                            (Credential::Identity(i.id), row.0, row.1)
+                        })
+                        .collect(),
+                ),
+                CredentialChoice::Key => (
+                    "Key",
+                    self.credentials
+                        .key
+                        .map_or(Credential::Inherit, Credential::Key),
+                    crate::keychain::list::sorted(model.keys())
+                        .into_iter()
+                        .map(|k| {
+                            (
+                                Credential::Key(k.id),
+                                k.title().to_owned(),
+                                k.kind.display_name(),
+                            )
+                        })
+                        .collect(),
+                ),
+            };
+        let choices: Vec<(Credential, String, String)> =
+            std::iter::once(inherit).chain(rest).collect();
+        let items = choices
+            .iter()
+            .map(|(_, label, detail)| PickerItem::new(label.clone()).detail(detail.clone()))
+            .collect();
+        let selected = choices
+            .iter()
+            .position(|(c, ..)| *c == current)
+            .unwrap_or(0);
+        let picker = cx.new(|cx| Picker::new(title, items, window, cx).with_selected(selected));
+        let subscription = cx.subscribe_in(&picker, window, move |editor, _, event, window, cx| {
+            if let PickerEvent::Picked(index) = event
+                && let Some((picked, ..)) = choices.get(*index)
+            {
+                match (choice, *picked) {
+                    (CredentialChoice::Identity, Credential::Identity(id)) => {
+                        editor.credentials.identity = Some(id);
+                    }
+                    (CredentialChoice::Key, Credential::Key(id)) => {
+                        editor.credentials.key = Some(id);
+                    }
+                    (CredentialChoice::Identity, _) => editor.credentials.identity = None,
+                    (CredentialChoice::Key, _) => editor.credentials.key = None,
+                }
+                editor.update_placeholders(cx);
+            }
+            editor.picker = None;
+            match choice {
+                CredentialChoice::Identity => editor.identity_focus.focus(window),
+                CredentialChoice::Key => editor.key_focus.focus(window),
+            }
+            cx.notify();
+        });
+        self.picker = Some((picker, subscription));
+        cx.notify();
     }
 
     /// Notes a settings problem against its field.
@@ -986,9 +1163,94 @@ impl Render for HostEditor {
                     &self.inputs.mac,
                     error(Field::Mac),
                 ));
+            let credential_hint = |own: bool, inherited: Option<String>| {
+                if own {
+                    None
+                } else {
+                    Some(inherited.unwrap_or_else(|| "None".to_owned()))
+                }
+            };
+            let identity_hint = credential_hint(
+                self.credentials.identity.is_some(),
+                inherited.as_ref().and_then(|inherited| {
+                    let id = inherited.identity.value?;
+                    let title = model.identity(id)?.title().to_owned();
+                    Some(format!(
+                        "Inherits {title}{}",
+                        source_text(inherited.identity.source)
+                    ))
+                }),
+            );
+            let key_hint = credential_hint(
+                self.credentials.key.is_some(),
+                inherited.as_ref().and_then(|inherited| {
+                    let id = inherited.key.value?;
+                    let title = model.key(id)?.title().to_owned();
+                    Some(format!(
+                        "Inherits {title}{}",
+                        source_text(inherited.key.source)
+                    ))
+                }),
+            );
+            let with_hint = |field: FormField, hint: Option<String>| match hint {
+                Some(hint) => field.hint(hint),
+                None => field,
+            };
+            let credentials = FormSection::new(if is_group {
+                "Credentials, for everything inside"
+            } else {
+                "Credentials"
+            })
+            .child(with_hint(
+                FormField::new(
+                    "Identity",
+                    Button::new(
+                        "identity",
+                        self.credential_label(CredentialChoice::Identity, cx),
+                    )
+                    .dropdown()
+                    .focus_handle(&self.identity_focus)
+                    .on_click(cx.listener(|editor, _, window, cx| {
+                        editor.open_credential_picker(CredentialChoice::Identity, window, cx);
+                    })),
+                ),
+                identity_hint,
+            ))
+            .child(with_hint(
+                FormField::new(
+                    "Key",
+                    Button::new("key", self.credential_label(CredentialChoice::Key, cx))
+                        .dropdown()
+                        .focus_handle(&self.key_focus)
+                        .on_click(cx.listener(|editor, _, window, cx| {
+                            editor.open_credential_picker(CredentialChoice::Key, window, cx);
+                        })),
+                ),
+                key_hint,
+            ))
+            .child(
+                FormField::new("Password", self.inputs.password.clone())
+                    .error(error(Field::Password)),
+            )
+            .when(self.credentials.password.is_some(), |section| {
+                section.child(FormField::new(
+                    "",
+                    Checkbox::new(
+                        "forget-password",
+                        "Forget the saved password",
+                        self.forget_password,
+                        &self.forget_focus,
+                    )
+                    .on_toggle(cx.listener(|editor, value: &bool, _, cx| {
+                        editor.forget_password = *value;
+                        cx.notify();
+                    })),
+                ))
+            });
             Form::new()
                 .child(main)
                 .child(connection)
+                .child(credentials)
                 .child(algorithms)
                 .when(!is_group, |form| {
                     form.child(FormSection::new("Notes").child(self.inputs.notes.clone()))
@@ -1033,7 +1295,7 @@ mod tests {
 
     use gpui::{TestAppContext, VisualTestContext};
     use pretty_assertions::assert_eq;
-    use ssherlock_core::Port;
+    use ssherlock_core::{ExposeSecret as _, Port};
     use ssherlock_store::{Repository as _, Store};
 
     use super::*;
@@ -1084,6 +1346,124 @@ mod tests {
 
     fn at(second: i64) -> Timestamp {
         Timestamp::from_second(second).unwrap()
+    }
+
+    #[gpui::test]
+    fn credentials_come_from_an_identity_and_a_typed_password_is_sealed(cx: &mut TestAppContext) {
+        let (f, cx) = open(|_| EditorMode::NewHost { group: None }, &[], &[], cx);
+        let mut identity = Identity::new("deploy", at(1));
+        identity.label = "Deploy".into();
+        let saved_identity = identity.clone();
+        f.model
+            .update(cx, |m, cx| m.save_identity(saved_identity, cx));
+        cx.run_until_parked();
+
+        // Pick the identity: the user name placeholder now says where it comes from.
+        f.editor.update_in(cx, |editor, window, cx| {
+            editor.open_credential_picker(CredentialChoice::Identity, window, cx);
+        });
+        let picker = f
+            .editor
+            .read_with(cx, |e, _| e.picker.as_ref().map(|(p, _)| p.clone()))
+            .unwrap();
+        picker.update(cx, |_, cx| cx.emit(PickerEvent::Picked(1)));
+        cx.run_until_parked();
+        let placeholder = |cx: &mut VisualTestContext| {
+            f.editor.read_with(cx, |editor, cx| {
+                editor
+                    .inputs
+                    .username
+                    .read(cx)
+                    .placeholder_text()
+                    .map(ToString::to_string)
+            })
+        };
+        assert_eq!(
+            placeholder(cx).as_deref(),
+            Some("deploy (from identity Deploy)")
+        );
+
+        let set =
+            |input: fn(&Inputs) -> &Entity<TextInput>, text: &str, cx: &mut VisualTestContext| {
+                let input = f.editor.read_with(cx, |e, _| input(&e.inputs).clone());
+                input.update(cx, |i, cx| i.set_text(text, cx));
+            };
+        set(|i| &i.address, "db.example.com", cx);
+        set(|i| &i.password, "hunter2", cx);
+        // Focus is on the identity button, where Enter would open its picker again.
+        f.editor.update_in(cx, |editor, window, cx| {
+            editor.save(&SaveEditor, window, cx);
+        });
+        cx.run_until_parked();
+        let host = f
+            .model
+            .read_with(cx, |m, _| m.hosts().first().cloned())
+            .unwrap();
+        assert_eq!(host.settings.identity, Some(identity.id));
+        let vault = f.model.read_with(cx, |m, _| m.vault().cloned()).unwrap();
+        let sealed = host.settings.password.clone().unwrap();
+        assert_eq!(
+            vault.open_string(&sealed).unwrap().expose_secret(),
+            "hunter2"
+        );
+    }
+
+    /// Regression: picking with Enter returned focus to the dropdown button, and the key's
+    /// release clicked it, opening the picker again.
+    #[gpui::test]
+    fn picking_with_enter_does_not_reopen_the_picker(cx: &mut TestAppContext) {
+        let (f, cx) = open(|_| EditorMode::NewHost { group: None }, &[], &[], cx);
+        let is_open =
+            |cx: &mut VisualTestContext| f.editor.read_with(cx, |e, _| e.picker.is_some());
+        // A full press: gpui clicks a focused element on the key's release.
+        let press = |cx: &mut VisualTestContext| {
+            cx.simulate_keystrokes("enter");
+            cx.simulate_event(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse("enter").unwrap(),
+            });
+            cx.run_until_parked();
+        };
+        f.editor
+            .update_in(cx, |editor, window, _| editor.group_focus.focus(window));
+        press(cx);
+        assert!(is_open(cx), "Enter on the focused button opens the picker");
+        press(cx);
+        assert!(
+            !is_open(cx),
+            "Enter picks and closes it, and its release does nothing"
+        );
+    }
+
+    #[gpui::test]
+    fn a_saved_password_is_kept_unless_forgotten(cx: &mut TestAppContext) {
+        let mut host = Host::new("example.com".parse().unwrap(), at(1));
+        host.settings.password = Some(Sealed::from_bytes(vec![9; 40]));
+        let original = host.clone();
+        let (f, cx) = open(
+            move |_| EditorMode::EditHost(original),
+            &[host.clone()],
+            &[],
+            cx,
+        );
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let saved = f
+            .model
+            .read_with(cx, |m, _| m.host(host.id).cloned())
+            .unwrap();
+        assert_eq!(saved.settings.password, host.settings.password, "kept");
+
+        let original = saved.clone();
+        let (f, cx) = open(move |_| EditorMode::EditHost(original), &[saved], &[], cx);
+        f.editor
+            .update(cx, |editor, _| editor.forget_password = true);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let forgotten = f
+            .model
+            .read_with(cx, |m, _| m.host(host.id).cloned())
+            .unwrap();
+        assert_eq!(forgotten.settings.password, None);
     }
 
     #[gpui::test]

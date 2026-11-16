@@ -36,7 +36,7 @@ use crate::components::form::{FocusNext, FocusPrevious};
 use crate::components::{
     Button, ButtonStyle, Picker, PickerEvent, PickerItem, TextInput, TextInputEvent,
 };
-use crate::keychain::KeyList;
+use crate::keychain::{IdentityList, KeyList};
 use crate::ssh::SshEnvironment;
 use crate::theme::{ActiveTheme as _, Theme};
 
@@ -68,6 +68,8 @@ pub struct HostList {
     editor: Option<(Entity<HostEditor>, Subscription)>,
     /// The keys page, shown in place of the hosts when "Keys" is chosen.
     keys: Entity<KeyList>,
+    /// The identities page, shown when "Identities" is chosen.
+    identities: Entity<IdentityList>,
     /// A host just saved, to put the cursor on once it shows up.
     pending_cursor: Option<Id<Host>>,
     nav_focus: FocusHandle,
@@ -86,6 +88,7 @@ impl Focusable for HostList {
         match &self.picker {
             Some((picker, _)) => picker.focus_handle(cx),
             None if self.section == Section::Keys => self.keys.focus_handle(cx),
+            None if self.section == Section::Identities => self.identities.focus_handle(cx),
             None => self.list_focus.clone(),
         }
     }
@@ -96,9 +99,11 @@ impl HostList {
     pub fn new(model: Entity<HostsModel>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::field("", cx).placeholder("Search hosts"));
         let keys = cx.new(|cx| KeyList::new(model.clone(), cx));
+        let identities = cx.new(|cx| IdentityList::new(model.clone(), cx));
         let subscriptions = vec![
-            // The keys page's dialogs are drawn over the whole page, so it redraws with them.
+            // The keychain pages' dialogs are drawn over the whole page, so it redraws with them.
             cx.observe(&keys, |_, _, cx| cx.notify()),
+            cx.observe(&identities, |_, _, cx| cx.notify()),
             cx.observe(&model, |list, _, cx| list.refresh(cx)),
             cx.subscribe(&search, |list, _, event: &TextInputEvent, cx| {
                 if let TextInputEvent::Changed(_) = event {
@@ -119,6 +124,7 @@ impl HostList {
             picker: None,
             editor: None,
             keys,
+            identities,
             pending_cursor: None,
             nav_focus: cx.focus_handle().tab_stop(true),
             list_focus: cx.focus_handle().tab_stop(true),
@@ -154,7 +160,7 @@ impl HostList {
         let still_there = match &self.section {
             Section::Hosts(Scope::Group(id)) => tree.get(*id).is_some(),
             Section::Tag(tag) => model.hosts().iter().any(|h| h.tags.contains(tag)),
-            Section::Hosts(_) | Section::Keys | Section::Trash => true,
+            Section::Hosts(_) | Section::Keys | Section::Identities | Section::Trash => true,
         };
         if !still_there {
             self.section = Section::all();
@@ -170,9 +176,12 @@ impl HostList {
                 tag: Some(tag.clone()),
                 scope: Scope::All,
             },
-            Section::Keys | Section::Trash => HostQuery::default(),
+            Section::Keys | Section::Identities | Section::Trash => HostQuery::default(),
         };
-        self.visible = if matches!(self.section, Section::Keys | Section::Trash) {
+        self.visible = if matches!(
+            self.section,
+            Section::Keys | Section::Identities | Section::Trash
+        ) {
             Vec::new()
         } else {
             search::filter(model.hosts(), &query, &tree, self.sort)
@@ -208,6 +217,7 @@ impl HostList {
         let model = self.model.read(cx);
         let counts = nav::Counts {
             keys: model.keys().len(),
+            identities: model.identities().len(),
             trash: model.trash().len(),
         };
         nav::items(model.hosts(), model.groups(), counts, |id| {
@@ -476,9 +486,10 @@ impl HostList {
     }
 
     fn focus_list(&mut self, _: &FocusList, window: &mut Window, cx: &mut Context<Self>) {
-        if self.section == Section::Keys {
-            self.keys.focus_handle(cx).focus(window);
-            return;
+        match self.section {
+            Section::Keys => return self.keys.focus_handle(cx).focus(window),
+            Section::Identities => return self.identities.focus_handle(cx).focus(window),
+            _ => {}
         }
         self.list_focus.focus(window);
         if self.selection.cursor().is_none() {
@@ -733,6 +744,7 @@ impl Render for HostList {
                 d.child(editor.clone())
             })
             .children(self.keys.read(cx).overlay())
+            .children(self.identities.read(cx).overlay())
     }
 }
 
@@ -937,6 +949,7 @@ impl HostList {
             Section::Hosts(Scope::Group(id)) => tree.path(*id),
             Section::Tag(tag) => format!("#{tag}"),
             Section::Keys => "Keys".to_owned(),
+            Section::Identities => "Identities".to_owned(),
             Section::Trash => "Trash".to_owned(),
         };
         let count = if is_trash {
@@ -1180,8 +1193,10 @@ impl HostList {
             });
 
         let page = div().flex().size_full().child(nav);
-        if self.section == Section::Keys {
-            return page.child(self.keys.clone());
+        match self.section {
+            Section::Keys => return page.child(self.keys.clone()),
+            Section::Identities => return page.child(self.identities.clone()),
+            _ => {}
         }
         page.child(
             div()
@@ -1312,7 +1327,7 @@ mod tests {
             list.nav_focus.focus(window);
             cx.notify();
         });
-        cx.simulate_keystrokes("end up");
+        cx.simulate_keystrokes("end up up");
         assert_eq!(
             f.list.read_with(cx, |l, _| l.section.clone()),
             Section::Keys
@@ -1344,6 +1359,35 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(f.model.read_with(cx, |m, _| m.keys().len()), 0);
+    }
+
+    #[gpui::test]
+    fn the_identities_page_adds_one_from_the_keyboard(cx: &mut TestAppContext) {
+        let (f, cx) = page(&[], &[], cx);
+        f.list
+            .update(cx, |list, cx| list.show(Section::Identities, cx));
+        f.list.update_in(cx, |list, window, cx| {
+            list.focus_list(&FocusList, window, cx);
+        });
+        cx.simulate_keystrokes("n");
+        cx.simulate_input("Deploy");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_input("deploy");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let saved = f.model.read_with(cx, |m, _| m.identities().to_vec());
+        assert_eq!(saved.len(), 1);
+        let identity = saved.first().unwrap();
+        assert_eq!(
+            (identity.title(), identity.username.as_str()),
+            ("Deploy", "deploy")
+        );
+        let identities = f.list.read_with(cx, |l, _| l.identities.clone());
+        assert_eq!(
+            identities.read_with(cx, |l, _| l.cursor()),
+            Some(identity.id)
+        );
+        assert!(identities.read_with(cx, |l, _| l.editor().is_none()));
     }
 
     #[gpui::test]

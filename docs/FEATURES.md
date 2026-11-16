@@ -47,10 +47,9 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 ## 2. Hosts & organisation (HOST)
 
-- [~] **HOST-01** Host record: label, address, port, username, credential or identity, group, tags, notes, colour (Free)
-  _Left: choosing a credential or identity, with the keychain (Phase 4). Logins use the agent, default keys and password prompts until then._
+- [x] **HOST-01** Host record: label, address, port, username, credential or identity, group, tags, notes, colour (Free)
 - [~] **HOST-02** Groups, nested; children inherit settings (credentials, env, terminal settings) with per-host override (Free)
-  _Left: credentials (Phase 4), environment variables (Phase 8) and terminal settings (HOST-10, Phase 9) join the inheritance when they arrive. Everything a host has today already inherits._
+  _Left: environment variables (Phase 8) and terminal settings (HOST-10, Phase 9) join the inheritance when they arrive. Everything a host has today, credentials included, already inherits._
 - [x] **HOST-03** Tags, filter by tag (Free)
 - [x] **HOST-04** Instant search over label, address, tags, notes (Free)
 - [x] **HOST-05** Sort by name / last used / created; list and grid views (Free)
@@ -105,9 +104,8 @@ documented in a doc comment, no secrets logged, box ticked here.
 ## 4. Keychain (KEY)
 
 - [x] **KEY-01** Store SSH private keys (encrypted at rest) (Free)
-- [ ] **KEY-02** Store passwords (Free)
-- [~] **KEY-03** Identities: username + key/password reusable across hosts, change once → applies everywhere (Free)
-  _Left: logging in with an identity's key and password, and editing identities in the keychain view (rest of Phase 4). A host's user name already comes from its identity._
+- [x] **KEY-02** Store passwords (Free)
+- [x] **KEY-03** Identities: username + key/password reusable across hosts, change once → applies everywhere (Free)
 - [x] **KEY-04** Generate keys: Ed25519, ECDSA P-256/384/521, RSA 2048–4096, with passphrase (Free)
 - [x] **KEY-05** Import keys from file, clipboard, `~/.ssh` scan (Free)
 - [x] **KEY-06** Export keys: OpenSSH, PEM/PKCS#8, public key only (Free)
@@ -118,8 +116,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [x] **KEY-11** Passphrase caching with timeout (Free)
 - [ ] **KEY-12** Biometric unlock (Touch ID / Windows Hello) and OS keychain integration (Pro)
 - [x] **KEY-13** Show fingerprint (SHA-256, MD5) and randomart (Free)
-- [~] **KEY-14** Which hosts use this key / identity (Free)
-  _Left: identities' usage, with the identities view (rest of Phase 4). Keys show theirs._
+- [x] **KEY-14** Which hosts use this key / identity (Free)
 - [ ] **KEY-15** Key rotation helper: generate new, push to all hosts using old, retire old (+)
 
 ## 5. Port forwarding (FWD)

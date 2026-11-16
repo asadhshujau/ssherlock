@@ -340,6 +340,8 @@ pub struct Unlocked {
     pub vault: Vault,
     /// Where its key is kept, so the UI can warn when it's only a file.
     pub location: KeyLocation,
+    /// Whether the vault was created just now, rather than found from an earlier start.
+    pub is_new: bool,
 }
 
 /// The kind of thing an [`Id`] in the `vault` table names.
@@ -402,7 +404,11 @@ impl Store {
                     return Err(StoreError::VaultWrongKey(location));
                 }
                 tracing::info!(%location, "unlocked the vault");
-                Ok(Unlocked { vault, location })
+                Ok(Unlocked {
+                    vault,
+                    location,
+                    is_new: false,
+                })
             }
             None => self.create_vault(keychain, fallback),
         }
@@ -445,7 +451,11 @@ impl Store {
             Ok(())
         })?;
         tracing::info!(%location, "created the vault");
-        Ok(Unlocked { vault, location })
+        Ok(Unlocked {
+            vault,
+            location,
+            is_new: true,
+        })
     }
 }
 
@@ -488,7 +498,13 @@ mod tests {
 
     #[test]
     fn seal_and_open_round_trip_without_the_plaintext_in_the_ciphertext() {
-        let (_, _, Unlocked { vault, location }) = unlocked();
+        let (
+            _,
+            _,
+            Unlocked {
+                vault, location, ..
+            },
+        ) = unlocked();
         assert_eq!(location, KeyLocation::Keychain);
         let secret = b"-----BEGIN OPENSSH PRIVATE KEY----- hunter2";
         let sealed = vault.seal(secret).unwrap();
@@ -556,6 +572,7 @@ mod tests {
         let file = KeyFile::new(&path);
         let unlocked = store.unlock_vault(&no_keychain, &file).unwrap();
         assert_eq!(unlocked.location, KeyLocation::File);
+        assert!(unlocked.is_new);
         assert_eq!(std::fs::read(&path).unwrap().len(), KEY_LEN);
         #[cfg(unix)]
         {
@@ -569,6 +586,7 @@ mod tests {
         let keychain = MemoryKeyHolder::default();
         let again = store.unlock_vault(&keychain, &file).unwrap();
         assert_eq!(again.location, KeyLocation::File);
+        assert!(!again.is_new);
         assert_eq!(again.vault.open(&sealed).unwrap().expose_secret(), b"x");
         assert!(keychain.load("anything").unwrap().is_none());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -626,7 +644,7 @@ mod tests {
         let (_, _, unlocked) = unlocked();
         assert_eq!(
             format!("{unlocked:?}"),
-            "Unlocked { vault: Vault, location: Keychain }"
+            "Unlocked { vault: Vault, location: Keychain, is_new: true }"
         );
     }
 }

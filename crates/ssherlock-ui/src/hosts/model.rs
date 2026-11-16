@@ -177,7 +177,8 @@ impl HostsModel {
     ) {
         self.vault = match unlocked {
             Ok(unlocked) => {
-                if unlocked.location == KeyLocation::File {
+                // Said once, when the vault is made; every start after uses the same file.
+                if unlocked.location == KeyLocation::File && unlocked.is_new {
                     notify::info(
                         "No OS keychain was found, so saved passwords and keys are protected by \
                          a key file in SSHerlock's data folder",

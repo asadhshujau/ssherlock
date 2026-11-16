@@ -132,6 +132,30 @@
     }
   },
   {
+    "context": "IdentityList",
+    "bindings": {
+      "down": "hosts::SelectNext",
+      "up": "hosts::SelectPrevious",
+      "home": "hosts::SelectFirst",
+      "end": "hosts::SelectLast",
+      "n": "keychain::NewIdentity",
+      "enter": "keychain::EditIdentity",
+      "e": "keychain::EditIdentity",
+      "f2": "keychain::EditIdentity",
+      "delete": "keychain::DeleteIdentity",
+      "backspace": "keychain::DeleteIdentity"
+    }
+  },
+  {
+    "context": "IdentityEditor",
+    "bindings": {
+      "enter": "keychain::SaveIdentityEditor",
+      "secondary-enter": "keychain::SaveIdentityEditor",
+      "secondary-s": "keychain::SaveIdentityEditor",
+      "escape": "keychain::CancelIdentityEditor"
+    }
+  },
+  {
     "context": "Trash",
     "bindings": {
       "down": "hosts::SelectNext",
