@@ -15,6 +15,8 @@ pub enum Section {
     Tag(Tag),
     /// Saved keys (the keychain).
     Keys,
+    /// Identities (the keychain).
+    Identities,
     /// Deleted hosts and groups.
     Trash,
 }
@@ -131,6 +133,7 @@ pub fn items(
 
     items.push(NavItem::Heading("Keychain"));
     items.push(entry(Section::Keys, "Keys", counts.keys));
+    items.push(entry(Section::Identities, "Identities", counts.identities));
     items.push(NavItem::Heading("Deleted"));
     items.push(entry(Section::Trash, "Trash", counts.trash));
     items
@@ -141,6 +144,8 @@ pub fn items(
 pub struct Counts {
     /// Saved keys.
     pub keys: usize,
+    /// Identities.
+    pub identities: usize,
     /// Trash entries.
     pub trash: usize,
 }
@@ -194,7 +199,11 @@ mod tests {
         let hosts = vec![a, b];
         let groups = vec![prod.clone(), db];
 
-        let counts = Counts { keys: 3, trash: 2 };
+        let counts = Counts {
+            keys: 3,
+            identities: 1,
+            trash: 2,
+        };
         let collapsed = items(&hosts, &groups, counts, |_| false);
         assert_eq!(
             labels(&collapsed),
@@ -208,6 +217,7 @@ mod tests {
                 "#pg 1",
                 "[Keychain]",
                 "Keys 3",
+                "Identities 1",
                 "[Deleted]",
                 "Trash 2",
             ]
@@ -234,6 +244,7 @@ mod tests {
                 "Recent 0",
                 "[Keychain]",
                 "Keys 0",
+                "Identities 0",
                 "[Deleted]",
                 "Trash 0"
             ]

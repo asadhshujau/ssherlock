@@ -1,9 +1,12 @@
 //! A clickable text button.
 
+use std::rc::Rc;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, Div, ElementId, FocusHandle, InteractiveElement, Interactivity, IntoElement,
-    ParentElement as _, RenderOnce, SharedString, Stateful, Styled as _, Window, div,
+    App, ClickEvent, Div, ElementId, FocusHandle, InteractiveElement, Interactivity, IntoElement,
+    ParentElement as _, RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Window, div,
 };
 
 use super::form::Activate;
@@ -27,9 +30,15 @@ pub enum ButtonStyle {
 /// `on_click` covers the keyboard too. The keymap binds the key-down to
 /// [`form::Activate`](super::form::Activate), which the button swallows so Enter doesn't also
 /// reach a binding further out (like an editor's "Enter saves").
+///
+/// A keyboard click counts only if the key went down on the button too. Otherwise Enter that
+/// picks an item in a picker would, on release, click the dropdown button focus returns to and
+/// open the picker again.
 #[derive(IntoElement)]
 pub struct Button {
+    id: ElementId,
     root: Stateful<Div>,
+    on_click: Option<ClickHandler>,
     label: SharedString,
     style: ButtonStyle,
     focus_handle: Option<FocusHandle>,
@@ -37,11 +46,16 @@ pub struct Button {
     is_dropdown: bool,
 }
 
+type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
 impl Button {
     /// A subtle button labelled `label`.
     pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
+        let id = id.into();
         Self {
-            root: div().id(id),
+            root: div().id(id.clone()),
+            id,
+            on_click: None,
             label: label.into(),
             style: ButtonStyle::Subtle,
             focus_handle: None,
@@ -64,6 +78,16 @@ impl Button {
         self
     }
 
+    /// Runs `handler` when the button is clicked, or pressed with Enter or Space while focused.
+    #[must_use]
+    pub fn on_click(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Rc::new(handler));
+        self
+    }
+
     /// Sets how prominent the button is.
     #[must_use]
     pub fn style(mut self, style: ButtonStyle) -> Self {
@@ -82,19 +106,41 @@ impl gpui::StatefulInteractiveElement for Button {}
 
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let colors = &theme.colors;
-        let hover = colors.control_hover;
+        let hover = cx.theme().colors.control_hover;
         let is_focused = self
             .focus_handle
             .as_ref()
             .is_some_and(|handle| handle.is_focused(window));
+        // Whether Enter or Space went down on this button, so its release may click it.
+        let pressed = self
+            .focus_handle
+            .is_some()
+            .then(|| window.use_keyed_state(self.id.clone(), cx, |_, _| false));
+        let on_click = self.on_click.map(|handler| {
+            let pressed = pressed.clone();
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                if let (ClickEvent::Keyboard(_), Some(pressed)) = (event, &pressed) {
+                    let was_pressed = pressed.update(cx, |p, _| std::mem::take(p));
+                    if !was_pressed {
+                        return;
+                    }
+                }
+                handler(event, window, cx);
+            }
+        });
+        let theme = cx.theme();
+        let colors = &theme.colors;
         self.root
             .when_some(self.focus_handle, |d, handle| {
-                d.key_context("Button")
-                    .track_focus(&handle)
-                    .on_action(|_: &Activate, _, _| {})
+                d.key_context("Button").track_focus(&handle).on_action(
+                    move |_: &Activate, _, cx| {
+                        if let Some(pressed) = &pressed {
+                            pressed.update(cx, |p, _| *p = true);
+                        }
+                    },
+                )
             })
+            .when_some(on_click, |d, on_click| d.on_click(on_click))
             .flex()
             .items_center()
             .justify_center()

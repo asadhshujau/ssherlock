@@ -2,8 +2,7 @@
 
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window, actions, div,
+    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Window, actions, div,
 };
 
 use super::button::{Button, ButtonStyle};

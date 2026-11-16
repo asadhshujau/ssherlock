@@ -3,8 +3,8 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClickEvent, FontWeight, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div,
+    App, ClickEvent, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _,
+    Window, div,
 };
 use ssherlock_core::hosts::Host;
 use ssherlock_core::{Timestamp, time};
