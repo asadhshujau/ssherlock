@@ -26,7 +26,9 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "SSHerlock started");
 
-    let database = dirs.as_ref().map(dirs::AppDirs::database);
+    let database = dirs
+        .as_ref()
+        .map(|dirs| (dirs.database(), dirs.vault_key()));
     let ssh = dirs.as_ref().map(|dirs| {
         let ssh_dir = dirs::ssh_dir();
         ssherlock_ui::ssh::SshEnvironment {
@@ -42,8 +44,8 @@ fn main() -> anyhow::Result<()> {
         ssherlock_ui::platform::detect_primary_paste(cx);
         // Opened in the background; the hosts page says "loading" until it's ready.
         match database {
-            Some(path) => {
-                ssherlock_ui::hosts::HostsModel::open(path, cx);
+            Some((path, key_file)) => {
+                ssherlock_ui::hosts::HostsModel::open(path, key_file, cx);
             }
             None => {
                 ssherlock_ui::hosts::HostsModel::unavailable("there is no home directory", cx);

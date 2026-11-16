@@ -38,6 +38,11 @@ impl AppDirs {
         self.data_local.join("ssherlock.db")
     }
 
+    /// Where the vault's master key is kept when there's no OS keychain (ADR 0008).
+    pub fn vault_key(&self) -> PathBuf {
+        self.data_local.join("vault.key")
+    }
+
     /// SSHerlock's own `known_hosts`, where host keys the user trusts are saved.
     pub fn known_hosts(&self) -> PathBuf {
         self.data_local.join("known_hosts")

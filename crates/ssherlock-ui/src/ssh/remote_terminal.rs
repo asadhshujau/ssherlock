@@ -19,11 +19,42 @@ use ssherlock_terminal::{PtyExit, PtyIo, PtyOutput, TerminalSize};
 use tokio::sync::mpsc;
 
 use super::dialogs::{KeyRow, host_key_text, login_text};
-use super::{ConnectOptions, SshEnvironment, status};
+use super::{ConnectOptions, OpenedCredentials, Passphrases, SshEnvironment, status};
 use crate::components::{InputKind, Modal, ModalEvent, TextInput, TextInputEvent};
+use crate::hosts::HostsModel;
+use crate::notify;
 use crate::runtime::TokioHandle;
 use crate::terminal::{TerminalView, TerminalViewEvent, mono_family};
 use crate::theme::ActiveTheme as _;
+
+/// Opens the saved key and password `options` name, so the login can try them first. If they
+/// can't be opened, says why and logs in without them (the agent, key files and prompts still
+/// work).
+fn open_saved(options: &ConnectOptions, cx: &mut App) -> OpenedCredentials {
+    if options.credentials.is_empty() {
+        return OpenedCredentials::default();
+    }
+    let Some(model) = HostsModel::global(cx) else {
+        return OpenedCredentials::default();
+    };
+    let opened = {
+        let model = model.read(cx);
+        match model.vault() {
+            Some(vault) => options
+                .credentials
+                .open(model.keys(), vault)
+                .map_err(|error| error.to_string()),
+            None => Err(model
+                .vault_problem()
+                .map_or_else(String::new, |p| p.to_string())),
+        }
+    };
+    opened.unwrap_or_else(|reason| {
+        tracing::warn!(%reason, "logging in without the saved credentials");
+        notify::info(format!("Saved credentials weren't used: {reason}"), cx);
+        OpenedCredentials::default()
+    })
+}
 
 /// Session events in flight to the view: a few state changes and at most one question at a
 /// time (the session waits for each answer), so a small buffer never fills in practice.
@@ -119,7 +150,12 @@ impl RemoteTerminal {
                     .as_deref()
                     .map(default_key_files)
                     .unwrap_or_default();
-                let config = RemoteShellConfig::new(connect, AuthMethod::defaults(key_files));
+                let saved = open_saved(options, cx);
+                let mut config = RemoteShellConfig::new(
+                    connect,
+                    AuthMethod::with_saved(saved.key, saved.password, key_files),
+                );
+                config.passphrases = cx.try_global::<Passphrases>().map(|p| p.0.clone());
                 let host_keys = HostKeys::new(
                     env.known_hosts,
                     env.read_only_known_hosts,
