@@ -9,10 +9,11 @@ use gpui::{
 use ssherlock_core::ConnectTarget;
 
 use super::actions::{
-    CloseTab, MoveTabLeft, MoveTabRight, NewTab, NextTab, PreviousTab, RenameTab,
+    CloseTab, MoveTabLeft, MoveTabRight, NewTab, NextTab, PreviousTab, RenameTab, ShowHosts,
 };
 use super::list::{Step, TabList};
 use crate::components::{InputKind, Tab, TabBar, TextInput, TextInputEvent};
+use crate::hosts::{HostList, HostListEvent, HostsModel};
 use crate::ssh::actions::QuickConnect;
 use crate::ssh::{QuickConnectBar, QuickConnectEvent, RemoteTerminal};
 use crate::terminal::{TerminalView, TerminalViewEvent};
@@ -20,6 +21,8 @@ use crate::theme::ActiveTheme as _;
 
 /// Shown for a tab whose program hasn't set a title.
 const DEFAULT_TITLE: &str = "Terminal";
+/// The title of the hosts page's tab, and of the window while it's shown.
+const HOSTS_TITLE: &str = "Hosts";
 
 /// What a tab shows: a shell on this machine or on a server.
 enum TabView {
@@ -101,11 +104,15 @@ impl Render for DraggedTab {
     }
 }
 
-/// A tab bar over the active tab's terminal.
+/// A tab bar over the active tab's terminal, with the hosts page pinned in front.
 pub struct Pane {
     tabs: TabList<PaneTab>,
     rename: Option<Rename>,
     quick_connect: Option<(Entity<QuickConnectBar>, Subscription)>,
+    /// The hosts page, if saved hosts are set up (`HostsModel` installed).
+    hosts: Option<(Entity<HostList>, Subscription)>,
+    /// Whether the hosts page is in front rather than the active tab.
+    is_showing_hosts: bool,
     focus_handle: FocusHandle,
 }
 
@@ -113,6 +120,9 @@ impl Focusable for Pane {
     fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
         if let Some((bar, _)) = &self.quick_connect {
             return bar.focus_handle(cx);
+        }
+        if let Some(hosts) = self.visible_hosts() {
+            return hosts.focus_handle(cx);
         }
         self.tabs.active().map_or_else(
             || self.focus_handle.clone(),
@@ -122,24 +132,74 @@ impl Focusable for Pane {
 }
 
 impl Pane {
-    /// A pane with one local terminal tab.
+    /// A pane with one local terminal tab, and the hosts page behind its own tab if saved
+    /// hosts are set up.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let hosts = HostsModel::global(cx).map(|model| {
+            let list = cx.new(|cx| HostList::new(model, cx));
+            let subscription = cx.subscribe_in(&list, window, Self::hosts_event);
+            (list, subscription)
+        });
         let mut pane = Self {
             tabs: TabList::default(),
             rename: None,
             quick_connect: None,
+            hosts,
+            is_showing_hosts: false,
             focus_handle: cx.focus_handle(),
         };
         pane.open_tab(window, cx);
         pane
     }
 
-    /// The active tab's label, for the window title.
+    /// The active tab's label, or "Hosts" while the hosts page is in front; for the window
+    /// title.
     pub fn title(&self, cx: &gpui::App) -> SharedString {
+        if self.visible_hosts().is_some() {
+            return SharedString::new_static(HOSTS_TITLE);
+        }
         self.tabs.active().map_or_else(
             || SharedString::new_static(DEFAULT_TITLE),
             |tab| label(tab, cx),
         )
+    }
+
+    /// The hosts page, if it's what the pane shows: chosen, or because no tab is open.
+    fn visible_hosts(&self) -> Option<&Entity<HostList>> {
+        self.hosts
+            .as_ref()
+            .filter(|_| self.is_showing_hosts || self.tabs.is_empty())
+            .map(|(list, _)| list)
+    }
+
+    /// Whether the hosts page is in front.
+    pub fn is_showing_hosts(&self) -> bool {
+        self.visible_hosts().is_some()
+    }
+
+    fn show_hosts(&mut self, _: &ShowHosts, window: &mut Window, cx: &mut Context<Self>) {
+        if self.hosts.is_none() {
+            return;
+        }
+        // A second press goes back to the terminal.
+        self.is_showing_hosts = !self.is_showing_hosts || self.tabs.is_empty();
+        self.focus_active(window, cx);
+    }
+
+    fn hosts_event(
+        &mut self,
+        _: &Entity<HostList>,
+        event: &HostListEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let HostListEvent::Connect(requests) = event;
+        for request in requests {
+            self.open_remote_tab(&request.target, window, cx);
+            if let Some(model) = HostsModel::global(cx) {
+                model.update(cx, |model, cx| model.record_connection(request.host, cx));
+            }
+        }
     }
 
     /// Number of open tabs.
@@ -187,6 +247,7 @@ impl Pane {
             has_bell: false,
             _subscription: subscription,
         });
+        self.is_showing_hosts = false;
         self.focus_active(window, cx);
     }
 
@@ -256,6 +317,11 @@ impl Pane {
     }
 
     fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(hosts) = self.visible_hosts() {
+            hosts.focus_handle(cx).focus(window);
+            cx.notify();
+            return;
+        }
         if let Some(index) = self.tabs.active_index()
             && let Some(tab) = self.tabs.get_mut(index)
         {
@@ -279,12 +345,17 @@ impl Pane {
     }
 
     fn next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
-        self.tabs.activate_next();
+        // From the hosts page, the next tab is the one that was active.
+        if !std::mem::take(&mut self.is_showing_hosts) {
+            self.tabs.activate_next();
+        }
         self.focus_active(window, cx);
     }
 
     fn previous_tab(&mut self, _: &PreviousTab, window: &mut Window, cx: &mut Context<Self>) {
-        self.tabs.activate_previous();
+        if !std::mem::take(&mut self.is_showing_hosts) {
+            self.tabs.activate_previous();
+        }
         self.focus_active(window, cx);
     }
 
@@ -306,6 +377,7 @@ impl Pane {
 
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.tabs.activate(index);
+        self.is_showing_hosts = false;
         self.focus_active(window, cx);
     }
 
@@ -363,6 +435,15 @@ impl Pane {
 
     fn tab_bar(&self, cx: &mut Context<Self>) -> TabBar {
         let last = self.tabs.len().saturating_sub(1);
+        let hosts_in_front = self.visible_hosts().is_some();
+        let hosts_tab = self.hosts.as_ref().map(|_| {
+            Tab::new("hosts-tab", SharedString::new_static(HOSTS_TITLE))
+                .active(hosts_in_front)
+                .on_click(cx.listener(|pane, _, window, cx| {
+                    pane.is_showing_hosts = true;
+                    pane.focus_active(window, cx);
+                }))
+        });
         let tabs = self.tabs.iter().enumerate().map(|(index, tab)| {
             let id = tab.view.entity_id();
             let text = label(tab, cx);
@@ -375,7 +456,7 @@ impl Pane {
                 label: text,
             };
             Tab::new(("tab", id.as_u64()), label)
-                .active(self.tabs.active_index() == Some(index))
+                .active(!hosts_in_front && self.tabs.active_index() == Some(index))
                 .indicator(tab.has_bell)
                 .on_click(
                     cx.listener(move |pane, event: &gpui::ClickEvent, window, cx| {
@@ -409,7 +490,7 @@ impl Pane {
                 }))
         });
         TabBar::new("tabs")
-            .tabs(tabs.collect::<Vec<_>>())
+            .tabs(hosts_tab.into_iter().chain(tabs).collect::<Vec<_>>())
             .end_button(
                 "+",
                 cx.listener(|pane, _, window, cx| pane.open_tab(window, cx)),
@@ -436,7 +517,11 @@ fn label(tab: &PaneTab, cx: &gpui::App) -> SharedString {
 impl Render for Pane {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let active = self.tabs.active().map(|tab| tab.view.element());
+        let active = match self.visible_hosts() {
+            Some(hosts) => Some(hosts.clone().into_any_element()),
+            None => self.tabs.active().map(|tab| tab.view.element()),
+        };
+        let is_empty = active.is_none();
         div()
             .key_context("Pane")
             .track_focus(&self.focus_handle)
@@ -448,6 +533,7 @@ impl Render for Pane {
             .on_action(cx.listener(Self::move_tab_right))
             .on_action(cx.listener(Self::rename_tab))
             .on_action(cx.listener(Self::quick_connect))
+            .on_action(cx.listener(Self::show_hosts))
             .relative()
             .flex()
             .flex_col()
@@ -455,44 +541,48 @@ impl Render for Pane {
             .min_h_0()
             .size_full()
             .child(self.tab_bar(cx))
-            .child(div().flex().flex_1().min_h_0().children(active).when(
-                self.tabs.is_empty(),
-                |d| {
-                    d.items_center()
-                        .justify_center()
-                        .bg(theme.colors.background)
-                        .text_color(theme.colors.text_muted)
-                        .child(
-                            div()
-                                .id("empty-new-tab")
-                                .px(theme.spacing.lg)
-                                .py(theme.spacing.sm)
-                                .rounded(theme.radius.sm)
-                                .border(theme.metrics.border_width)
-                                .border_color(theme.colors.border)
-                                .hover(|style| style.text_color(theme.colors.text))
-                                .on_click(cx.listener(|pane, _, window, cx| {
-                                    pane.open_tab(window, cx);
-                                }))
-                                .child("New tab"),
-                        )
-                        .child(
-                            div()
-                                .id("empty-quick-connect")
-                                .ml(theme.spacing.md)
-                                .px(theme.spacing.lg)
-                                .py(theme.spacing.sm)
-                                .rounded(theme.radius.sm)
-                                .border(theme.metrics.border_width)
-                                .border_color(theme.colors.border)
-                                .hover(|style| style.text_color(theme.colors.text))
-                                .on_click(cx.listener(|pane, _, window, cx| {
-                                    pane.quick_connect(&QuickConnect, window, cx);
-                                }))
-                                .child("Quick connect"),
-                        )
-                },
-            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .children(active)
+                    .when(is_empty, |d| {
+                        d.items_center()
+                            .justify_center()
+                            .bg(theme.colors.background)
+                            .text_color(theme.colors.text_muted)
+                            .child(
+                                div()
+                                    .id("empty-new-tab")
+                                    .px(theme.spacing.lg)
+                                    .py(theme.spacing.sm)
+                                    .rounded(theme.radius.sm)
+                                    .border(theme.metrics.border_width)
+                                    .border_color(theme.colors.border)
+                                    .hover(|style| style.text_color(theme.colors.text))
+                                    .on_click(cx.listener(|pane, _, window, cx| {
+                                        pane.open_tab(window, cx);
+                                    }))
+                                    .child("New tab"),
+                            )
+                            .child(
+                                div()
+                                    .id("empty-quick-connect")
+                                    .ml(theme.spacing.md)
+                                    .px(theme.spacing.lg)
+                                    .py(theme.spacing.sm)
+                                    .rounded(theme.radius.sm)
+                                    .border(theme.metrics.border_width)
+                                    .border_color(theme.colors.border)
+                                    .hover(|style| style.text_color(theme.colors.text))
+                                    .on_click(cx.listener(|pane, _, window, cx| {
+                                        pane.quick_connect(&QuickConnect, window, cx);
+                                    }))
+                                    .child("Quick connect"),
+                            )
+                    }),
+            )
             .when_some(self.quick_connect.as_ref(), |d, (bar, _)| {
                 d.child(bar.clone())
             })
@@ -701,5 +791,100 @@ mod tests {
             DEFAULT_TITLE,
             "an empty name goes back to the default"
         );
+    }
+
+    /// A pane with saved hosts set up over an in-memory database holding `hosts`.
+    fn pane_with_hosts<'a>(
+        hosts: &[ssherlock_core::hosts::Host],
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<Pane>, Entity<HostsModel>, &'a mut VisualTestContext) {
+        use ssherlock_store::Repository as _;
+
+        cx.update(crate::notify::init);
+        let store = std::sync::Arc::new(ssherlock_store::Store::open_in_memory().unwrap());
+        store.upsert_all(hosts).unwrap();
+        let model = cx.update(|cx| HostsModel::install(store, cx));
+        cx.run_until_parked();
+        let (pane, cx) = pane(cx);
+        cx.run_until_parked();
+        (pane, model, cx)
+    }
+
+    #[gpui::test]
+    fn the_hosts_page_toggles_and_fills_an_empty_pane(cx: &mut TestAppContext) {
+        let (pane, _, cx) = pane_with_hosts(&[], cx);
+        let state = |cx: &mut VisualTestContext| {
+            pane.read_with(cx, |pane, cx| {
+                (pane.is_showing_hosts(), pane.title(cx).to_string())
+            })
+        };
+        assert_eq!(
+            state(cx),
+            (false, DEFAULT_TITLE.to_owned()),
+            "it starts on a terminal"
+        );
+        cx.dispatch_action(ShowHosts);
+        assert_eq!(state(cx), (true, HOSTS_TITLE.to_owned()));
+        cx.dispatch_action(ShowHosts);
+        assert!(!state(cx).0, "a second press goes back");
+        cx.dispatch_action(ShowHosts);
+        cx.dispatch_action(NextTab);
+        assert!(!state(cx).0, "the next tab leaves the hosts page");
+
+        cx.dispatch_action(CloseTab);
+        assert!(state(cx).0, "with no tabs left, the hosts page shows");
+        cx.dispatch_action(ShowHosts);
+        assert!(state(cx).0, "and stays, as there's nothing to go back to");
+        cx.dispatch_action(NewTab);
+        assert!(!state(cx).0, "a new tab comes to the front");
+    }
+
+    #[gpui::test]
+    fn connecting_to_a_saved_host_from_the_keyboard(cx: &mut TestAppContext) {
+        // Port 9 on localhost has nothing listening, so the attempt fails at once and never
+        // leaves this machine.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("ssherlock-ui-hosts-{}", std::process::id()));
+        cx.update(|cx| {
+            cx.set_global(crate::runtime::TokioHandle::new(runtime.handle().clone()));
+            cx.set_global(crate::ssh::SshEnvironment {
+                known_hosts: dir.join("known_hosts"),
+                read_only_known_hosts: Vec::new(),
+                ssh_dir: None,
+                local_user: Some("tester".into()),
+            });
+        });
+        let mut host = ssherlock_core::hosts::Host::new(
+            "127.0.0.1".parse().unwrap(),
+            ssherlock_core::Timestamp::UNIX_EPOCH,
+        );
+        host.label = "local test".into();
+        host.settings.port = ssherlock_core::Port::new(9);
+        host.settings.username = Some("saved-user".into());
+        let id = host.id;
+        let (pane, model, cx) = pane_with_hosts(&[host], cx);
+
+        cx.dispatch_action(ShowHosts);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let (count, showing, title) = pane.read_with(cx, |pane, cx| {
+            (pane.tab_count(), pane.is_showing_hosts(), pane.title(cx))
+        });
+        assert_eq!((count, showing), (2, false));
+        assert_eq!(
+            title, "saved-user@127.0.0.1:9",
+            "the saved user and port are used"
+        );
+        let last_connected =
+            model.read_with(cx, |m, _| m.host(id).and_then(|h| h.last_connected_at));
+        assert!(
+            last_connected.is_some(),
+            "the connection is recorded for Recents"
+        );
+        drop(runtime);
     }
 }

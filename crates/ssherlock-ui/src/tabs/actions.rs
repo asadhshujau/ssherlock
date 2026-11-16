@@ -19,5 +19,7 @@ actions!(
         MoveTabRight,
         /// Edits the active tab's name.
         RenameTab,
+        /// Shows the hosts page, or goes back to the active tab if it's already shown.
+        ShowHosts,
     ]
 );

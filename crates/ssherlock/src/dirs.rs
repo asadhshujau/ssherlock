@@ -1,9 +1,9 @@
 //! Where SSHerlock keeps its files on each platform.
 //!
-//! Resolved once at startup and handed to whatever needs a path (logging now, the store later),
+//! Resolved once at startup and handed to whatever needs a path (logging, the database, SSH),
 //! so no crate looks up directories on its own.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use directories::ProjectDirs;
 use ssherlock_core::app;
@@ -33,13 +33,9 @@ impl AppDirs {
         self.data_local.join("logs")
     }
 
-    /// Machine-local data directory, never synced between devices.
-    #[allow(
-        dead_code,
-        reason = "the store uses this from Phase 3; keeps the type's shape now"
-    )]
-    pub fn data_local(&self) -> &Path {
-        &self.data_local
+    /// The database of saved hosts and everything else SSHerlock keeps.
+    pub fn database(&self) -> PathBuf {
+        self.data_local.join("ssherlock.db")
     }
 
     /// SSHerlock's own `known_hosts`, where host keys the user trusts are saved.
