@@ -1,12 +1,17 @@
-//! Logging in: SSH agent, key files, password and keyboard-interactive, tried in order.
+//! Logging in: keychain keys, SSH agent, key files, saved and typed passwords, and
+//! keyboard-interactive, tried in order.
 //!
 //! **Service** layer. Each method is one small function with the same shape: it gets an
 //! [`Authenticator`] and returns a [`Step`]. Anything the user must type (a password, a key
 //! passphrase, a 2FA code) goes up as a [`SessionEvent::Prompt`] carrying a `oneshot` reply;
 //! answers come back as [`SecretString`]s and are exposed only at the moment they're sent.
+//! Typed passphrases are remembered for a while in a [`PassphraseCache`] (KEY-11).
 
+use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::client::AgentClient;
@@ -24,17 +29,154 @@ const MAX_PROMPTS: usize = 3;
 /// Keyboard-interactive rounds within one attempt before giving up on a server that keeps asking.
 const MAX_INFO_ROUNDS: usize = 16;
 
+/// How long a typed passphrase is remembered by default (KEY-11).
+pub const DEFAULT_PASSPHRASE_TTL: Duration = Duration::from_secs(15 * 60);
+
 /// One way of logging in. A session tries a list of these in order (see [`AuthMethod::defaults`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum AuthMethod {
+    /// A key from the keychain, already opened from the vault.
+    StoredKey(StoredKey),
     /// Keys held by an SSH agent.
     Agent(AgentSocket),
     /// A private key file, decrypted with a passphrase the user is asked for if it's encrypted.
     KeyFile(PathBuf),
+    /// A saved password, tried once; if it's refused, [`AuthMethod::Password`] asks.
+    SavedPassword(SecretString),
     /// A password the user is asked for.
     Password,
     /// Server-driven prompts: 2FA codes, PAM conversations, a password asked the PAM way.
     KeyboardInteractive,
+}
+
+/// A keychain key to log in with.
+#[derive(Clone)]
+pub struct StoredKey {
+    /// The name shown when asking for its passphrase.
+    pub label: String,
+    /// Its `SHA256:…` fingerprint; also what its passphrase is cached under.
+    pub fingerprint: String,
+    /// The private key in OpenSSH format, encrypted if it has a passphrase.
+    pub private_key: SecretString,
+    /// The saved passphrase, if the user saved it.
+    pub passphrase: Option<SecretString>,
+}
+
+impl fmt::Debug for StoredKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredKey")
+            .field("label", &self.label)
+            .field("fingerprint", &self.fingerprint)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Passphrases the user typed, remembered for a while so the next connection with the same key
+/// doesn't ask again (KEY-11). Clones share one cache.
+///
+/// Entries expire `ttl` after they were typed; an expired one is wiped by a timer on the Tokio
+/// runtime, or on the next access when there is none.
+#[derive(Clone)]
+pub struct PassphraseCache {
+    entries: Arc<Mutex<HashMap<String, Cached>>>,
+    ttl: Duration,
+}
+
+struct Cached {
+    passphrase: SecretString,
+    expires: Instant,
+}
+
+impl fmt::Debug for PassphraseCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PassphraseCache")
+            .field("ttl", &self.ttl)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for PassphraseCache {
+    fn default() -> Self {
+        Self::new(DEFAULT_PASSPHRASE_TTL)
+    }
+}
+
+impl PassphraseCache {
+    /// An empty cache whose entries last `ttl`. A zero `ttl` remembers nothing.
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            entries: Arc::default(),
+            ttl,
+        }
+    }
+
+    /// The passphrase remembered for `key` (a fingerprint or key file path), if it hasn't
+    /// expired.
+    pub fn get(&self, key: &str) -> Option<SecretString> {
+        let mut entries = self.lock()?;
+        purge(&mut entries);
+        entries.get(key).map(|cached| cached.passphrase.clone())
+    }
+
+    /// Remembers `passphrase` for `key`.
+    pub fn insert(&self, key: &str, passphrase: SecretString) {
+        if self.ttl.is_zero() {
+            return;
+        }
+        let Some(mut entries) = self.lock() else {
+            return;
+        };
+        purge(&mut entries);
+        entries.insert(
+            key.to_owned(),
+            Cached {
+                passphrase,
+                expires: Instant::now() + self.ttl,
+            },
+        );
+        drop(entries);
+        // Wipe it on time even if nothing asks again.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let entries = Arc::downgrade(&self.entries);
+            let ttl = self.ttl;
+            runtime.spawn(async move {
+                tokio::time::sleep(ttl).await;
+                if let Some(entries) = entries.upgrade()
+                    && let Ok(mut entries) = entries.lock()
+                {
+                    purge(&mut entries);
+                }
+            });
+        }
+    }
+
+    /// Forgets the passphrase for `key`, e.g. when it turned out to be wrong.
+    pub fn forget(&self, key: &str) {
+        if let Some(mut entries) = self.lock() {
+            entries.remove(key);
+        }
+    }
+
+    /// Forgets every passphrase.
+    pub fn clear(&self) {
+        if let Some(mut entries) = self.lock() {
+            entries.clear();
+        }
+    }
+
+    fn lock(&self) -> Option<std::sync::MutexGuard<'_, HashMap<String, Cached>>> {
+        let entries = self.entries.lock().ok();
+        if entries.is_none() {
+            // Another thread panicked mid-update. Acting as empty only means asking again.
+            tracing::warn!("the passphrase cache is unavailable after a crash; asking again");
+        }
+        entries
+    }
+}
+
+fn purge(entries: &mut HashMap<String, Cached>) {
+    let now = Instant::now();
+    entries.retain(|_, cached| cached.expires > now);
 }
 
 /// Where to find the SSH agent.
@@ -55,18 +197,41 @@ impl AuthMethod {
             .collect()
     }
 
+    /// The keychain's credentials first, then [`defaults`](Self::defaults): `key`, the agent,
+    /// `key_files`, `password` once, then asking for a password, then keyboard-interactive.
+    pub fn with_saved(
+        key: Option<StoredKey>,
+        password: Option<SecretString>,
+        key_files: impl IntoIterator<Item = PathBuf>,
+    ) -> Vec<Self> {
+        let mut methods: Vec<Self> = key.into_iter().map(Self::StoredKey).collect();
+        let mut password = password;
+        for method in Self::defaults(key_files) {
+            if matches!(method, Self::Password)
+                && let Some(password) = password.take()
+            {
+                methods.push(Self::SavedPassword(password));
+            }
+            methods.push(method);
+        }
+        methods
+    }
+
     fn kind(&self) -> MethodKind {
         match self {
-            Self::Agent(_) | Self::KeyFile(_) => MethodKind::PublicKey,
-            Self::Password => MethodKind::Password,
+            Self::StoredKey(_) | Self::Agent(_) | Self::KeyFile(_) => MethodKind::PublicKey,
+            Self::SavedPassword(_) | Self::Password => MethodKind::Password,
             Self::KeyboardInteractive => MethodKind::KeyboardInteractive,
         }
     }
 
-    fn label(&self) -> &'static str {
+    /// A short name for logs and errors.
+    pub fn label(&self) -> &'static str {
         match self {
+            Self::StoredKey(_) => "saved key",
             Self::Agent(_) => "agent",
             Self::KeyFile(_) => "key file",
+            Self::SavedPassword(_) => "saved password",
             Self::Password => "password",
             Self::KeyboardInteractive => "keyboard-interactive",
         }
@@ -105,8 +270,8 @@ pub enum AuthPromptKind {
     },
     /// The passphrase of an encrypted private key.
     Passphrase {
-        /// The key file.
-        key: PathBuf,
+        /// The key: a file's path, or a keychain key's name.
+        key: String,
         /// The previous passphrase was wrong.
         is_retry: bool,
     },
@@ -166,6 +331,9 @@ pub(crate) struct Authenticator<'a> {
     pub(crate) user: &'a str,
     pub(crate) host: &'a str,
     pub(crate) events: &'a mpsc::Sender<SessionEvent>,
+    pub(crate) passphrases: Option<&'a PassphraseCache>,
+    /// A saved password was refused, so the first password prompt says so.
+    pub(crate) saved_password_refused: bool,
 }
 
 impl Authenticator<'_> {
@@ -184,8 +352,10 @@ impl Authenticator<'_> {
                 continue;
             }
             let step = match method {
+                AuthMethod::StoredKey(key) => self.stored_key(key).await?,
                 AuthMethod::Agent(socket) => self.agent(socket).await?,
                 AuthMethod::KeyFile(path) => self.key_file(path).await?,
+                AuthMethod::SavedPassword(password) => self.saved_password(password).await?,
                 AuthMethod::Password => self.password().await?,
                 AuthMethod::KeyboardInteractive => self.keyboard_interactive().await?,
             };
@@ -262,38 +432,121 @@ impl Authenticator<'_> {
     }
 
     async fn key_file(&mut self, path: &Path) -> Result<Step, SshError> {
-        let mut passphrase: Option<SecretString> = None;
+        let name = path.display().to_string();
+        let loaded = self
+            .unlock(&name, &name, None, |passphrase| {
+                load_key(path.to_owned(), passphrase)
+            })
+            .await?;
+        match loaded {
+            Some(key) => self.sign_in(key).await,
+            None => Ok(Step::Skipped),
+        }
+    }
+
+    async fn stored_key(&mut self, key: &StoredKey) -> Result<Step, SshError> {
+        let private_key = key.private_key.clone();
+        let loaded = self
+            .unlock(
+                &key.label,
+                &key.fingerprint,
+                key.passphrase.clone(),
+                |passphrase| open_stored(private_key.clone(), passphrase),
+            )
+            .await?;
+        match loaded {
+            Some(key) => self.sign_in(key).await,
+            None => Ok(Step::Skipped),
+        }
+    }
+
+    /// Loads a key with `load`, which is given a passphrase: first `saved`, else one cached
+    /// under `cache_key`, else none; then, while it says one is needed, what the user types
+    /// when asked about `name`. A typed passphrase that works is cached. `None` means the key
+    /// can't be used and the next method gets its turn.
+    async fn unlock<F, Fut>(
+        &self,
+        name: &str,
+        cache_key: &str,
+        saved: Option<SecretString>,
+        load: F,
+    ) -> Result<Option<russh::keys::PrivateKey>, SshError>
+    where
+        F: Fn(Option<SecretString>) -> Fut,
+        Fut: std::future::Future<Output = Result<russh::keys::PrivateKey, KeyLoad>>,
+    {
+        let cached = saved
+            .is_none()
+            .then(|| self.passphrases.and_then(|c| c.get(cache_key)))
+            .flatten();
+        let mut is_cached = cached.is_some();
+        let mut passphrase = saved.or(cached);
         let mut asked = 0;
-        let key = loop {
-            match load_key(path, passphrase.clone()).await {
-                Ok(key) => break key,
+        loop {
+            match load(passphrase.clone()).await {
+                Ok(key) => {
+                    if asked > 0
+                        && let (Some(cache), Some(typed)) = (self.passphrases, passphrase)
+                    {
+                        cache.insert(cache_key, typed);
+                    }
+                    return Ok(Some(key));
+                }
                 Err(KeyLoad::Missing) => {
-                    tracing::debug!(path = %path.display(), "no key file here");
-                    return Ok(Step::Skipped);
+                    tracing::debug!(key = name, "no key file here");
+                    return Ok(None);
                 }
                 Err(KeyLoad::NeedsPassphrase) if asked < MAX_PROMPTS => {
+                    if is_cached {
+                        if let Some(cache) = self.passphrases {
+                            cache.forget(cache_key);
+                        }
+                        is_cached = false;
+                    }
                     let kind = AuthPromptKind::Passphrase {
-                        key: path.to_owned(),
-                        is_retry: asked > 0,
+                        key: name.to_owned(),
+                        // A saved or cached passphrase that failed counts as a first try.
+                        is_retry: asked > 0 || passphrase.is_some(),
                     };
                     passphrase = Some(self.ask_one(kind, "Passphrase:").await?);
                     asked += 1;
                 }
                 Err(KeyLoad::NeedsPassphrase) => {
-                    tracing::warn!(path = %path.display(), "wrong passphrase {MAX_PROMPTS} times; skipping this key");
-                    return Ok(Step::Skipped);
+                    tracing::warn!(
+                        key = name,
+                        "wrong passphrase {MAX_PROMPTS} times; skipping this key"
+                    );
+                    return Ok(None);
                 }
                 Err(KeyLoad::Unusable(reason)) => {
-                    tracing::warn!(path = %path.display(), %reason, "could not read the key file; skipping it");
-                    return Ok(Step::Skipped);
+                    tracing::warn!(key = name, %reason, "could not read the key; skipping it");
+                    return Ok(None);
                 }
             }
-        };
+        }
+    }
+
+    /// Offers `key` to the server.
+    async fn sign_in(&mut self, key: russh::keys::PrivateKey) -> Result<Step, SshError> {
         let hash = self.rsa_hash(key.public_key()).await?;
         let key = PrivateKeyWithHashAlg::new(Arc::new(key), hash);
         Ok(step_from(
             self.handle.authenticate_publickey(self.user, key).await?,
         ))
+    }
+
+    async fn saved_password(&mut self, password: &SecretString) -> Result<Step, SshError> {
+        // russh takes an owned String for the wire; this is the one place it's exposed.
+        let result = self
+            .handle
+            .authenticate_password(self.user, password.expose_secret())
+            .await?;
+        let step = step_from(result);
+        if matches!(step, Step::Continue(_)) {
+            tracing::info!("the saved password was refused");
+            self.saved_password_refused = true;
+        }
+        Ok(step)
     }
 
     async fn password(&mut self) -> Result<Step, SshError> {
@@ -302,7 +555,7 @@ impl Authenticator<'_> {
             let kind = AuthPromptKind::Password {
                 user: self.user.to_owned(),
                 host: self.host.to_owned(),
-                is_retry: attempt > 0,
+                is_retry: attempt > 0 || self.saved_password_refused,
             };
             let password = self.ask_one(kind, "Password:").await?;
             // russh takes an owned String for the wire; this is the one place it's exposed.
@@ -472,13 +725,31 @@ enum KeyLoad {
     Unusable(String),
 }
 
+/// Decrypts a keychain key off the async runtime, as [`load_key`] does for files.
+async fn open_stored(
+    private_key: SecretString,
+    passphrase: Option<SecretString>,
+) -> Result<russh::keys::PrivateKey, KeyLoad> {
+    let opened = tokio::task::spawn_blocking(move || {
+        crate::keys::open_blocking(&private_key, passphrase.as_ref())
+    })
+    .await;
+    match opened {
+        Ok(Ok(key)) => Ok(key),
+        Ok(Err(SshError::KeyNeedsPassphrase | SshError::KeyWrongPassphrase)) => {
+            Err(KeyLoad::NeedsPassphrase)
+        }
+        Ok(Err(e)) => Err(KeyLoad::Unusable(e.to_string())),
+        Err(e) => Err(KeyLoad::Unusable(format!("key loading task failed: {e}"))),
+    }
+}
+
 /// Reads and decrypts a key file off the async runtime: the bcrypt KDF of an encrypted OpenSSH
 /// key deliberately takes a noticeable fraction of a second.
 async fn load_key(
-    path: &Path,
+    path: PathBuf,
     passphrase: Option<SecretString>,
 ) -> Result<russh::keys::PrivateKey, KeyLoad> {
-    let path = path.to_owned();
     let had_passphrase = passphrase.is_some();
     let loaded = tokio::task::spawn_blocking(move || {
         russh::keys::load_secret_key(&path, passphrase.as_ref().map(ExposeSecret::expose_secret))
@@ -524,38 +795,102 @@ mod tests {
         );
         let methods = AuthMethod::defaults(keys.into_iter().take(1));
         assert_eq!(
-            methods,
-            vec![
-                AuthMethod::Agent(AgentSocket::FromEnvironment),
-                AuthMethod::KeyFile(PathBuf::from("/home/u/.ssh/id_ed25519")),
-                AuthMethod::Password,
-                AuthMethod::KeyboardInteractive,
+            labels(&methods),
+            ["agent", "key file", "password", "keyboard-interactive"]
+        );
+        assert!(matches!(
+            methods.get(1),
+            Some(AuthMethod::KeyFile(path)) if path == Path::new("/home/u/.ssh/id_ed25519")
+        ));
+    }
+
+    fn labels(methods: &[AuthMethod]) -> Vec<&'static str> {
+        methods.iter().map(AuthMethod::label).collect()
+    }
+
+    #[test]
+    fn saved_credentials_go_first_in_their_kind() {
+        let key = StoredKey {
+            label: "Laptop".into(),
+            fingerprint: "SHA256:x".into(),
+            private_key: SecretString::from("-----BEGIN OPENSSH PRIVATE KEY-----"),
+            passphrase: Some(SecretString::from("hunter2")),
+        };
+        let methods = AuthMethod::with_saved(
+            Some(key),
+            Some(SecretString::from("pw")),
+            [PathBuf::from("/k")],
+        );
+        assert_eq!(
+            labels(&methods),
+            [
+                "saved key",
+                "agent",
+                "key file",
+                "saved password",
+                "password",
+                "keyboard-interactive"
             ]
+        );
+        let debug = format!("{methods:?}");
+        assert!(
+            !debug.contains("hunter2") && !debug.contains("OPENSSH"),
+            "{debug}"
+        );
+        assert_eq!(
+            labels(&AuthMethod::with_saved(None, None, [])),
+            ["agent", "password", "keyboard-interactive"]
         );
     }
 
     #[tokio::test]
+    async fn the_passphrase_cache_expires_and_forgets() {
+        let cache = PassphraseCache::new(Duration::from_millis(50));
+        cache.insert("SHA256:a", SecretString::from("one"));
+        let copy = cache.clone();
+        assert_eq!(copy.get("SHA256:a").unwrap().expose_secret(), "one");
+        assert!(cache.get("SHA256:b").is_none());
+        cache.forget("SHA256:a");
+        assert!(cache.get("SHA256:a").is_none());
+
+        cache.insert("SHA256:a", SecretString::from("two"));
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        // The timer has already wiped it from the map, not just hidden it.
+        assert!(cache.entries.lock().unwrap().is_empty());
+        assert!(cache.get("SHA256:a").is_none());
+
+        cache.insert("k", SecretString::from("three"));
+        cache.clear();
+        assert!(cache.get("k").is_none());
+
+        let off = PassphraseCache::new(Duration::ZERO);
+        off.insert("k", SecretString::from("x"));
+        assert!(off.get("k").is_none());
+        assert!(!format!("{cache:?}").contains("three"));
+    }
+
+    #[tokio::test]
     async fn key_loading_outcomes() {
-        assert!(load_key(&fixture("id_ed25519"), None).await.is_ok());
-        assert!(load_key(&fixture("id_rsa"), None).await.is_ok());
+        assert!(load_key(fixture("id_ed25519"), None).await.is_ok());
+        assert!(load_key(fixture("id_rsa"), None).await.is_ok());
         assert!(matches!(
-            load_key(&fixture("does-not-exist"), None).await,
+            load_key(fixture("does-not-exist"), None).await,
             Err(KeyLoad::Missing)
         ));
         let encrypted = fixture("id_ed25519_encrypted");
         assert!(matches!(
-            load_key(&encrypted, None).await,
+            load_key(encrypted.clone(), None).await,
             Err(KeyLoad::NeedsPassphrase)
         ));
         let wrong = Some(SecretString::from("wrong"));
         assert!(matches!(
-            load_key(&encrypted, wrong).await,
+            load_key(encrypted.clone(), wrong).await,
             Err(KeyLoad::NeedsPassphrase)
         ));
         let right = Some(SecretString::from("fixture-passphrase"));
-        assert!(load_key(&encrypted, right).await.is_ok());
+        assert!(load_key(encrypted, right).await.is_ok());
         assert!(matches!(
-            load_key(&fixture("README.md"), None).await,
+            load_key(fixture("README.md"), None).await,
             Err(KeyLoad::Unusable(_))
         ));
     }

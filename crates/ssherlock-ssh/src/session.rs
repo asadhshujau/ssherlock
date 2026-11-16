@@ -16,7 +16,7 @@ use tracing::Instrument as _;
 
 use crate::SshError;
 use crate::algorithms::{AlgorithmPreferences, Compression};
-use crate::auth::{AuthMethod, AuthPrompt, Authenticator};
+use crate::auth::{AuthMethod, AuthPrompt, Authenticator, PassphraseCache};
 use crate::connection::ConnectionState;
 use crate::host_keys::HostKeys;
 use crate::known_hosts::{HostKeyStatus, KnownHostName, KnownKey};
@@ -203,6 +203,7 @@ pub struct Session {
     handle: client::Handle<ClientHandler>,
     config: ConnectConfig,
     events: mpsc::Sender<SessionEvent>,
+    passphrases: Option<PassphraseCache>,
 }
 
 impl std::fmt::Debug for Session {
@@ -235,10 +236,17 @@ impl Session {
                 handle,
                 config,
                 events,
+                passphrases: None,
             })
         }
         .instrument(span)
         .await
+    }
+
+    /// Remembers passphrases the user types while logging in, and uses ones remembered from
+    /// earlier logins (KEY-11).
+    pub fn use_passphrase_cache(&mut self, cache: PassphraseCache) {
+        self.passphrases = Some(cache);
     }
 
     /// Logs in as the configured user, trying `methods` in order until one works. Prompts go
@@ -256,6 +264,8 @@ impl Session {
             user: &self.config.username,
             host: &self.config.host,
             events: &self.events,
+            passphrases: self.passphrases.as_ref(),
+            saved_password_refused: false,
         };
         authenticator.run(methods).instrument(span).await
     }
