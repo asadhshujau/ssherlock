@@ -363,6 +363,11 @@ impl TextInput {
         self
     }
 
+    /// The placeholder, if any.
+    pub fn placeholder_text(&self) -> Option<&SharedString> {
+        self.placeholder.as_ref()
+    }
+
     /// Changes the placeholder.
     pub fn set_placeholder(&mut self, text: Option<SharedString>, cx: &mut Context<Self>) {
         self.placeholder = text;

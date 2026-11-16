@@ -40,12 +40,13 @@ impl CaseFile {
     }
 }
 
-/// The panel for `file`. `on_connect` runs when its Connect button is clicked.
+/// The panel for `file`, with Connect and Edit buttons running `on_connect` and `on_edit`.
 pub fn case_file(
     file: CaseFile,
     theme: &Theme,
     now: Timestamp,
     on_connect: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_edit: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let row = |label: &'static str, value: SharedString| {
         div()
@@ -126,10 +127,14 @@ pub fn case_file(
             )
         })
         .child(
-            div().child(
-                Button::new("case-file-connect", "Connect")
-                    .style(ButtonStyle::Primary)
-                    .on_click(on_connect),
-            ),
+            div()
+                .flex()
+                .gap(theme.spacing.md)
+                .child(
+                    Button::new("case-file-connect", "Connect")
+                        .style(ButtonStyle::Primary)
+                        .on_click(on_connect),
+                )
+                .child(Button::new("case-file-edit", "Edit").on_click(on_edit)),
         )
 }

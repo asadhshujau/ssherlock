@@ -7,6 +7,8 @@
 
 pub mod actions;
 pub mod detail;
+pub mod editor;
+pub mod fields;
 pub mod item;
 pub mod list;
 pub mod model;

@@ -15,6 +15,10 @@ type ToggleHandler = Rc<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
 
 /// A checkbox. Stateless: its owner keeps the value, passes it in each frame, and gets the new
 /// value from `on_toggle` when it's clicked or Space is pressed while it's focused.
+///
+/// Space works through gpui's keyboard click: releasing Enter or Space on a focused element
+/// clicks it. The keymap's `form::Toggle` on Space only swallows the key-down, so it can't reach
+/// a binding further out; handling the press on both edges toggled twice, i.e. not at all.
 #[derive(IntoElement)]
 pub struct Checkbox {
     id: ElementId,
@@ -55,16 +59,13 @@ impl RenderOnce for Checkbox {
         let theme = cx.theme();
         let is_focused = self.focus_handle.is_focused(window);
         let next = !self.is_checked;
-        let on_click = self.on_toggle.clone();
-        let on_key = self.on_toggle;
         div()
             .id(self.id)
             .key_context("Checkbox")
             .track_focus(&self.focus_handle)
-            .when_some(on_key, |d, handler| {
-                d.on_action(move |_: &Toggle, window, cx| handler(&next, window, cx))
-            })
-            .when_some(on_click, |d, handler| {
+            // The key-down only; the release clicks (see the type's docs).
+            .on_action(|_: &Toggle, _, _| {})
+            .when_some(self.on_toggle, |d, handler| {
                 d.on_click(move |_, window, cx| handler(&next, window, cx))
             })
             .flex()

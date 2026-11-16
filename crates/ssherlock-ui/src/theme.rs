@@ -259,6 +259,8 @@ pub struct Metrics {
     pub card_width: Pixels,
     /// Width of a toast notification.
     pub toast_width: Pixels,
+    /// Width of the host and group editor.
+    pub editor_width: Pixels,
 }
 
 impl Theme {
@@ -482,6 +484,7 @@ impl Default for Metrics {
             detail_width: px(300.),
             card_width: px(210.),
             toast_width: px(360.),
+            editor_width: px(640.),
         }
     }
 }
