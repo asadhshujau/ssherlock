@@ -6,7 +6,7 @@ use ssherlock_core::hosts::{Colour, Group, GroupTree, Host, resolve};
 use ssherlock_core::keychain::Identity;
 use ssherlock_core::{ConnectTarget, Id, Port};
 
-use crate::ssh::ConnectOptions;
+use crate::ssh::{ConnectOptions, SavedCredentials};
 
 /// One saved host to connect to, resolved against its groups.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +32,10 @@ impl ConnectRequest {
             options: ConnectOptions {
                 algorithms: settings.algorithms(),
                 compression: settings.compression.value,
+                credentials: SavedCredentials {
+                    key: settings.key.value,
+                    password: settings.password.value,
+                },
             },
             target: ConnectTarget {
                 user: settings.username.value,
@@ -87,13 +91,17 @@ mod tests {
     }
 
     #[test]
-    fn the_user_name_can_come_from_an_identity() {
+    fn credentials_can_come_from_an_identity() {
         let now = Timestamp::UNIX_EPOCH;
-        let identity = Identity::new("deploy", now);
+        let mut identity = Identity::new("deploy", now);
+        identity.key = Some(Id::generate());
+        identity.password = Some(ssherlock_core::Sealed::from_bytes(vec![1]));
         let mut host = Host::new("example.com".parse().unwrap(), now);
         host.settings.identity = Some(identity.id);
-        let request = ConnectRequest::new(&host, &[], &[identity]);
+        let request = ConnectRequest::new(&host, &[], std::slice::from_ref(&identity));
         assert_eq!(request.target.user.as_deref(), Some("deploy"));
+        assert_eq!(request.options.credentials.key, identity.key);
+        assert_eq!(request.options.credentials.password, identity.password);
     }
 
     #[test]

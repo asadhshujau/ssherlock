@@ -115,7 +115,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [ ] **KEY-08** OpenSSH certificates stored alongside keys (Pro)
 - [ ] **KEY-09** FIDO2 key enrolment and use (Pro)
 - [ ] **KEY-10** Built-in SSH agent (serve keys to other apps) (Pro)
-- [ ] **KEY-11** Passphrase caching with timeout (Free)
+- [x] **KEY-11** Passphrase caching with timeout (Free)
 - [ ] **KEY-12** Biometric unlock (Touch ID / Windows Hello) and OS keychain integration (Pro)
 - [ ] **KEY-13** Show fingerprint (SHA-256, MD5) and randomart (Free)
 - [~] **KEY-14** Which hosts use this key / identity (Free)
@@ -165,7 +165,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 ## 8. Sync, vaults & security (SEC)
 
 - [~] **SEC-01** Local encrypted storage at rest: master key in OS keychain, data encrypted with ChaCha20-Poly1305 (Free)
-  _Left: unlocking the vault when the app starts, and sealing keys and passwords with it (rest of Phase 4)._
+  _Left: saving keys and passwords from the keychain page and host editor (rest of Phase 4). The vault unlocks when the app starts, and logins open saved secrets with it._
 - [ ] **SEC-02** Optional master password with Argon2id; auto-lock after idle (Pro)
 - [ ] **SEC-03** Biometric unlock (Pro)
 - [ ] **SEC-04** End-to-end encrypted sync across devices, zero-knowledge server (Pro)
