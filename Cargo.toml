@@ -65,6 +65,8 @@ russh = "0.65.0"
 hmac = "0.13.0"
 # SHA-1 for that HMAC only; never used for anything new.
 sha1 = "0.11.0"
+# MD5 key fingerprints, shown beside SHA-256 for older tools and cloud consoles (KEY-13) only.
+md5 = { package = "md-5", version = "0.10.6" }
 # known_hosts salts and hashes, and sealed secrets inside JSON, are base64.
 base64 = "0.22.1"
 # OsRng for the salt of new hashed known_hosts entries, vault keys and nonces, and new SSH keys.

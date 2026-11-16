@@ -270,6 +270,7 @@ Logging: `tracing` macros only, with structured fields (`info!(host = %host.labe
 | Logging | `tracing`, `tracing-subscriber`, `tracing-appender` |
 | Secrets, crypto | `secrecy`, `zeroize`, `chacha20poly1305`, `argon2`, `sha2`, `hkdf`, `rand` (OsRng), `keyring` |
 | known_hosts hashing | `hmac`, `sha1` (OpenSSH's HMAC-SHA1 host hashing only), `base64` |
+| Key fingerprints | `md-5` (MD5 fingerprints for display only, KEY-13) |
 | Ids, time | `uuid` (v7), `jiff` |
 | Paths, config | `directories`, `notify` (file watching) |
 | HTTP | `reqwest` (rustls) |

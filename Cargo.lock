@@ -6612,6 +6612,7 @@ version = "0.0.1"
 dependencies = [
  "base64",
  "hmac 0.13.0",
+ "md-5",
  "pretty_assertions",
  "proptest",
  "rand 0.10.3",

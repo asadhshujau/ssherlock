@@ -8,6 +8,7 @@ pub mod auth;
 pub mod connection;
 mod error;
 pub mod host_keys;
+pub mod keys;
 pub mod known_hosts;
 pub mod session;
 mod shell;
