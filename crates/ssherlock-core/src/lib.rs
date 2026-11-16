@@ -17,6 +17,7 @@ pub mod port;
 pub mod quick_connect;
 pub mod secret;
 pub mod time;
+pub mod trash;
 
 pub use address::{Address, AddressError};
 pub use algorithms::{AlgorithmPreferences, Compression};
