@@ -19,11 +19,18 @@ pub(crate) struct Migration {
 }
 
 /// Every migration, in order.
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "hosts",
-    sql: include_str!("../migrations/0001_hosts.sql"),
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "hosts",
+        sql: include_str!("../migrations/0001_hosts.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "vault",
+        sql: include_str!("../migrations/0002_vault.sql"),
+    },
+];
 
 /// The newest schema version this build knows.
 fn latest() -> u32 {
@@ -138,7 +145,14 @@ mod tests {
         assert_eq!(current_version(&conn).unwrap(), latest());
         assert_eq!(
             tables(&conn),
-            ["groups", "host_tags", "hosts", "schema_migrations", "trash"]
+            [
+                "groups",
+                "host_tags",
+                "hosts",
+                "schema_migrations",
+                "trash",
+                "vault"
+            ]
         );
         migrate(&mut conn).unwrap();
         let applied: u32 = conn

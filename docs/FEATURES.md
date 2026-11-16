@@ -162,7 +162,8 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 ## 8. Sync, vaults & security (SEC)
 
-- [ ] **SEC-01** Local encrypted storage at rest: master key in OS keychain, data encrypted with ChaCha20-Poly1305 (Free)
+- [~] **SEC-01** Local encrypted storage at rest: master key in OS keychain, data encrypted with ChaCha20-Poly1305 (Free)
+  _Left: unlocking the vault when the app starts, and sealing keys and passwords with it (rest of Phase 4)._
 - [ ] **SEC-02** Optional master password with Argon2id; auto-lock after idle (Pro)
 - [ ] **SEC-03** Biometric unlock (Pro)
 - [ ] **SEC-04** End-to-end encrypted sync across devices, zero-knowledge server (Pro)

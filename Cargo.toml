@@ -65,10 +65,14 @@ russh = "0.65.0"
 hmac = "0.13.0"
 # SHA-1 for that HMAC only; never used for anything new.
 sha1 = "0.11.0"
-# known_hosts salts and hashes are base64.
+# known_hosts salts and hashes, and sealed secrets inside JSON, are base64.
 base64 = "0.22.1"
-# OsRng for the salt of new hashed known_hosts entries.
+# OsRng for the salt of new hashed known_hosts entries, vault keys and nonces, and new SSH keys.
 rand = "0.10.0"
+# The vault's cipher: XChaCha20-Poly1305 seals every saved secret (SEC-01, ADR 0008).
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+# The OS keychain (macOS Keychain, Secret Service on Linux) holds the vault's master key.
+keyring = "4.2.0"
 # SQLite for saved hosts and everything else persisted; `bundled` so every platform gets the
 # same, recent SQLite without a system library.
 rusqlite = { version = "0.41.1", features = ["bundled"] }
