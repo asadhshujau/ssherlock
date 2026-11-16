@@ -1,5 +1,6 @@
 //! Login against the Docker OpenSSH server with every method: key files (each type, encrypted),
-//! a throwaway `ssh-agent`, password and keyboard-interactive (PAM).
+//! keychain keys, a throwaway `ssh-agent`, saved and typed passwords, and keyboard-interactive
+//! (PAM).
 #![forbid(unsafe_code)]
 #![allow(
     missing_docs,
@@ -22,7 +23,8 @@ use ssherlock_ssh::auth::AuthPromptKind;
 use ssherlock_ssh::known_hosts::HostHashing;
 use ssherlock_ssh::session::HostKeyDecision;
 use ssherlock_ssh::{
-    AgentSocket, AuthMethod, ConnectConfig, HostKeys, Session, SessionEvent, SshError,
+    AgentSocket, AuthMethod, ConnectConfig, HostKeys, PassphraseCache, Session, SessionEvent,
+    SshError, StoredKey,
 };
 use tokio::sync::mpsc;
 
@@ -80,12 +82,26 @@ async fn login(
     methods: &[AuthMethod],
     replies: Vec<Reply>,
 ) -> (Result<(), SshError>, Vec<AuthPromptKind>) {
+    login_with_cache(server, test, methods, replies, None).await
+}
+
+/// As [`login`], remembering passphrases in `cache`.
+async fn login_with_cache(
+    server: &TestServer,
+    test: &str,
+    methods: &[AuthMethod],
+    replies: Vec<Reply>,
+    cache: Option<&PassphraseCache>,
+) -> (Result<(), SshError>, Vec<AuthPromptKind>) {
     let dir = temp_dir(test);
     let host_keys = HostKeys::new(dir.join("known_hosts"), vec![], HostHashing::Plain);
     let (tx, rx) = mpsc::channel(4);
     let user = fake_user(rx, replies);
     let config = ConnectConfig::new("127.0.0.1", harness::USER).with_port(server.addr().port());
     let mut session = Session::connect(config, host_keys, tx).await.unwrap();
+    if let Some(cache) = cache {
+        session.use_passphrase_cache(cache.clone());
+    }
     let result = session.authenticate(methods).await;
     drop(session);
     (result, user.await.unwrap())
@@ -135,14 +151,140 @@ async fn encrypted_key_asks_for_its_passphrase_until_right() {
         prompts,
         vec![
             AuthPromptKind::Passphrase {
-                key: key.clone(),
+                key: key.display().to_string(),
                 is_retry: false
             },
             AuthPromptKind::Passphrase {
-                key,
+                key: key.display().to_string(),
                 is_retry: true
             },
         ]
+    );
+}
+
+/// A keychain key as the UI hands it over: the fixture's text, opened from the vault.
+fn stored(name: &str, passphrase: Option<&str>) -> StoredKey {
+    StoredKey {
+        label: name.to_owned(),
+        fingerprint: format!("fingerprint-of-{name}"),
+        private_key: SecretString::from(std::fs::read_to_string(fixture(name)).unwrap()),
+        passphrase: passphrase.map(SecretString::from),
+    }
+}
+
+fn passphrase_prompt(key: &str, is_retry: bool) -> AuthPromptKind {
+    AuthPromptKind::Passphrase {
+        key: key.to_owned(),
+        is_retry,
+    }
+}
+
+#[tokio::test]
+async fn stored_keys_log_in() {
+    let Some(server) = TestServer::start("stored_keys_log_in") else {
+        return;
+    };
+    for key in ["id_ed25519", "id_ecdsa", "id_rsa"] {
+        let methods = [
+            AuthMethod::StoredKey(stored(key, None)),
+            AuthMethod::Password,
+        ];
+        let (result, prompts) = login(&server, key, &methods, vec![]).await;
+        assert!(result.is_ok(), "{key}: {result:?}");
+        assert_eq!(prompts, vec![], "{key}");
+    }
+    // A saved passphrase is used without asking.
+    let key = stored("id_ed25519_encrypted", Some(harness::KEY_PASSPHRASE));
+    let (result, prompts) = login(&server, "saved", &[AuthMethod::StoredKey(key)], vec![]).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(prompts, vec![]);
+}
+
+#[tokio::test]
+async fn a_typed_passphrase_is_cached_for_the_next_login() {
+    let Some(server) = TestServer::start("a_typed_passphrase_is_cached_for_the_next_login") else {
+        return;
+    };
+    let cache = PassphraseCache::default();
+    let methods = [AuthMethod::StoredKey(stored("id_ed25519_encrypted", None))];
+    let (result, prompts) = login_with_cache(
+        &server,
+        "first",
+        &methods,
+        vec![
+            Reply::Answer("wrong"),
+            Reply::Answer(harness::KEY_PASSPHRASE),
+        ],
+        Some(&cache),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        prompts,
+        vec![
+            passphrase_prompt("id_ed25519_encrypted", false),
+            passphrase_prompt("id_ed25519_encrypted", true),
+        ]
+    );
+    let (result, prompts) =
+        login_with_cache(&server, "second", &methods, vec![], Some(&cache)).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(prompts, vec![], "the cached passphrase is used");
+
+    // A key file's passphrase is cached under its path the same way.
+    let file = [AuthMethod::KeyFile(fixture("id_ed25519_encrypted"))];
+    let replies = vec![Reply::Answer(harness::KEY_PASSPHRASE)];
+    let (result, _) = login_with_cache(&server, "file", &file, replies, Some(&cache)).await;
+    assert!(result.is_ok(), "{result:?}");
+    let (result, prompts) = login_with_cache(&server, "file2", &file, vec![], Some(&cache)).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(prompts, vec![]);
+}
+
+#[tokio::test]
+async fn a_wrong_saved_passphrase_asks_as_a_retry() {
+    let Some(server) = TestServer::start("a_wrong_saved_passphrase_asks_as_a_retry") else {
+        return;
+    };
+    let key = stored("id_ed25519_encrypted", Some("stale"));
+    let (result, prompts) = login(
+        &server,
+        "stale",
+        &[AuthMethod::StoredKey(key)],
+        vec![Reply::Answer(harness::KEY_PASSPHRASE)],
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        prompts,
+        vec![passphrase_prompt("id_ed25519_encrypted", true)]
+    );
+}
+
+#[tokio::test]
+async fn a_saved_password_logs_in_and_a_stale_one_falls_back_to_asking() {
+    let Some(server) =
+        TestServer::start("a_saved_password_logs_in_and_a_stale_one_falls_back_to_asking")
+    else {
+        return;
+    };
+    let methods = |saved: &str| {
+        [
+            AuthMethod::SavedPassword(SecretString::from(saved)),
+            AuthMethod::Password,
+        ]
+    };
+    let (result, prompts) = login(&server, "saved", &methods(harness::PASSWORD), vec![]).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(prompts, vec![]);
+
+    let replies = vec![Reply::Answer(harness::PASSWORD)];
+    let (result, prompts) = login(&server, "stale", &methods("old-password"), replies).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        prompts,
+        vec![password_prompt(true)],
+        "says the saved one failed"
     );
 }
 

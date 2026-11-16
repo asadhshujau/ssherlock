@@ -124,11 +124,7 @@ pub fn login_text(kind: &AuthPromptKind) -> (String, String, String) {
         ),
         AuthPromptKind::Passphrase { key, is_retry } => (
             "Key passphrase".to_owned(),
-            format!(
-                "The key {} is encrypted.{}",
-                key.display(),
-                retry(*is_retry)
-            ),
+            format!("The key {key} is encrypted.{}", retry(*is_retry)),
             "Unlock".to_owned(),
         ),
         AuthPromptKind::Server { name, instructions } => (
@@ -247,7 +243,7 @@ mod tests {
             ),
             (
                 AuthPromptKind::Passphrase {
-                    key: PathBuf::from("/k/id"),
+                    key: "/k/id".to_owned(),
                     is_retry: false,
                 },
                 ("Key passphrase", "The key /k/id is encrypted.", "Unlock"),

@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use crate::SshError;
-use crate::auth::AuthMethod;
+use crate::auth::{AuthMethod, PassphraseCache};
 use crate::host_keys::HostKeys;
 use crate::session::{ConnectConfig, Session, SessionEvent};
 use crate::shell::{OpenShell, ShellEnd, bridge};
@@ -87,6 +87,8 @@ pub struct RemoteShellConfig {
     pub keep_alive: KeepAlive,
     /// Retry policy after a drop.
     pub reconnect: ReconnectPolicy,
+    /// Where typed passphrases are remembered between logins, if anywhere (KEY-11).
+    pub passphrases: Option<PassphraseCache>,
 }
 
 impl RemoteShellConfig {
@@ -97,6 +99,7 @@ impl RemoteShellConfig {
             methods,
             keep_alive: KeepAlive::default(),
             reconnect: ReconnectPolicy::default(),
+            passphrases: None,
         }
     }
 }
@@ -247,6 +250,9 @@ impl Supervisor {
         )
         .await?;
         self.state(ConnectionState::Authenticating).await;
+        if let Some(cache) = &self.config.passphrases {
+            session.use_passphrase_cache(cache.clone());
+        }
         session.authenticate(&self.config.methods).await?;
         let shell = session.open_shell_channel(self.size).await?;
         Ok((session, shell))
