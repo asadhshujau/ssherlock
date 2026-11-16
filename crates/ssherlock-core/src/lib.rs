@@ -14,6 +14,7 @@ pub mod app;
 pub mod fuzzy;
 pub mod hosts;
 pub mod id;
+pub mod keychain;
 pub mod port;
 pub mod quick_connect;
 pub mod secret;

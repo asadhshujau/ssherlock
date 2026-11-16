@@ -1,11 +1,20 @@
 //! Working out the settings a host ends up with: its own, else its nearest group's, else the
 //! default (HOST-02).
+//!
+//! Credentials resolve the same way once each layer's identity is unpacked: a layer that picks
+//! an [`Identity`] counts as setting that identity's user name, key and password, except where
+//! the layer sets one itself. So a host's own identity beats a group's user name, and a host's
+//! own user name beats its identity's.
+
+use std::borrow::Cow;
 
 use super::{Colour, Group, Host, HostSettings};
 use crate::address::Address;
 use crate::algorithms::{AlgorithmPreferences, Compression};
 use crate::id::Id;
+use crate::keychain::{Identity, Key};
 use crate::port::Port;
+use crate::secret::Sealed;
 
 /// Where a resolved setting came from, so an editor can say "inherited from Production".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,13 +55,26 @@ pub struct EffectiveSettings {
     pub mac: Resolved<Vec<String>>,
     /// Compression; default off.
     pub compression: Resolved<Compression>,
+    /// The identity picked; default none.
+    pub identity: Resolved<Option<Id<Identity>>>,
+    /// The saved key to log in with, from a layer or its identity; default none.
+    pub key: Resolved<Option<Id<Key>>>,
+    /// The saved password, from a layer or its identity; default none (ask).
+    pub password: Resolved<Option<Sealed>>,
 }
 
 impl EffectiveSettings {
-    /// Resolves `layers`, nearest first: the first layer that sets a field wins.
+    /// Resolves `layers`, nearest first: the first layer that sets a field wins. Identities the
+    /// layers pick are looked up in `identities`; one that isn't there (deleted) adds nothing.
     pub fn from_layers<'a>(
-        layers: impl IntoIterator<Item = (Source, &'a HostSettings)> + Clone,
+        layers: impl IntoIterator<Item = (Source, &'a HostSettings)>,
+        identities: &[Identity],
     ) -> Self {
+        let expanded: Vec<(Source, Cow<'a, HostSettings>)> = layers
+            .into_iter()
+            .map(|(source, settings)| (source, with_identity(settings, identities)))
+            .collect();
+        let layers = expanded.iter().map(|(source, s)| (*source, s.as_ref()));
         Self {
             port: pick(layers.clone(), |s| s.port, Port::SSH),
             username: pick(layers.clone(), |s| s.username.clone().map(Some), None),
@@ -69,14 +91,20 @@ impl EffectiveSettings {
                 Vec::new(),
             ),
             mac: pick(layers.clone(), |s| non_empty(&s.algorithms.mac), Vec::new()),
-            compression: pick(layers, |s| s.compression, Compression::Off),
+            compression: pick(layers.clone(), |s| s.compression, Compression::Off),
+            identity: pick(layers.clone(), |s| s.identity.map(Some), None),
+            key: pick(layers.clone(), |s| s.key.map(Some), None),
+            password: pick(layers, |s| s.password.clone().map(Some), None),
         }
     }
 
     /// What something inside `ancestors` (nearest first) inherits before its own settings: the
     /// placeholders an editor shows for fields left unset.
-    pub fn inherited(ancestors: &[&Group]) -> Self {
-        Self::from_layers(ancestors.iter().map(|g| (Source::Group(g.id), &g.settings)))
+    pub fn inherited(ancestors: &[&Group], identities: &[Identity]) -> Self {
+        Self::from_layers(
+            ancestors.iter().map(|g| (Source::Group(g.id), &g.settings)),
+            identities,
+        )
     }
 
     /// The algorithm lists as the SSH layer takes them.
@@ -104,26 +132,47 @@ pub struct EffectiveHost {
 }
 
 /// Resolves `host` inside `ancestors`, its groups nearest first (as
-/// [`GroupTree::ancestors`](super::GroupTree::ancestors) returns them).
-pub fn resolve(host: &Host, ancestors: &[&Group]) -> EffectiveHost {
+/// [`GroupTree::ancestors`](super::GroupTree::ancestors) returns them), unpacking the
+/// identities they pick from `identities`.
+pub fn resolve(host: &Host, ancestors: &[&Group], identities: &[Identity]) -> EffectiveHost {
     let layers = std::iter::once((Source::Own, &host.settings))
         .chain(ancestors.iter().map(|g| (Source::Group(g.id), &g.settings)));
     EffectiveHost {
         id: host.id,
         title: host.title().into_owned(),
         address: host.address.clone(),
-        settings: EffectiveSettings::from_layers(layers),
+        settings: EffectiveSettings::from_layers(layers, identities),
     }
+}
+
+/// `settings` with its identity's user name, key and password filling the ones it leaves unset.
+fn with_identity<'a>(settings: &'a HostSettings, identities: &[Identity]) -> Cow<'a, HostSettings> {
+    let Some(identity) = settings
+        .identity
+        .and_then(|id| identities.iter().find(|i| i.id == id))
+    else {
+        return Cow::Borrowed(settings);
+    };
+    let mut filled = settings.clone();
+    if filled.username.is_none() {
+        filled.username = Some(identity.username.clone());
+    }
+    if filled.key.is_none() {
+        filled.key = identity.key;
+    }
+    if filled.password.is_none() {
+        filled.password.clone_from(&identity.password);
+    }
+    Cow::Owned(filled)
 }
 
 /// The first layer's value for `field`, or `default`.
 fn pick<'a, T>(
-    layers: impl IntoIterator<Item = (Source, &'a HostSettings)>,
+    mut layers: impl Iterator<Item = (Source, &'a HostSettings)>,
     field: impl Fn(&HostSettings) -> Option<T>,
     default: T,
 ) -> Resolved<T> {
     layers
-        .into_iter()
         .find_map(|(source, settings)| field(settings).map(|value| Resolved { value, source }))
         .unwrap_or(Resolved {
             value: default,
@@ -175,7 +224,7 @@ mod tests {
         let groups = vec![prod.clone(), db.clone()];
         let tree = GroupTree::new(&groups);
 
-        let effective = resolve(&host, &tree.ancestors(host.group));
+        let effective = resolve(&host, &tree.ancestors(host.group), &[]);
         let s = &effective.settings;
 
         let own = |v| Resolved {
@@ -238,7 +287,9 @@ mod tests {
             let mut host = Host::new("h".parse().unwrap(), now);
             host.settings.port = h.and_then(port);
 
-            let resolved = resolve(&host, &[&inner_group, &outer_group]).settings.port;
+            let resolved = resolve(&host, &[&inner_group, &outer_group], &[])
+                .settings
+                .port;
             let sources = [
                 Source::Own,
                 Source::Group(inner_group.id),
@@ -253,7 +304,7 @@ mod tests {
     #[test]
     fn a_host_without_groups_gets_defaults() {
         let host = Host::new("example.com".parse().unwrap(), Timestamp::UNIX_EPOCH);
-        let s = resolve(&host, &[]).settings;
+        let s = resolve(&host, &[], &[]).settings;
         assert_eq!(s.port.value, Port::SSH);
         assert_eq!(s.username.value, None);
         assert_eq!(s.colour.value, None);
@@ -262,12 +313,73 @@ mod tests {
         assert_eq!(s.port.source, Source::Default);
     }
 
+    /// What the host's layer sets, the group's, and the user name and key that should win.
+    type Case<'a> = (
+        &'a [&'a str],
+        &'a [&'a str],
+        Option<&'a str>,
+        Option<Id<Key>>,
+    );
+
+    /// (host sets, group sets) -> which user name and key win. "id" means the layer picks an
+    /// identity (user `alice`, key A); "user" means it sets the user name `bob` itself; "key"
+    /// means it sets key B itself.
+    #[test]
+    fn identities_fill_their_own_layer_only() {
+        let now = Timestamp::UNIX_EPOCH;
+        let key_a: Id<Key> = Id::generate();
+        let key_b: Id<Key> = Id::generate();
+        let mut alice = Identity::new("alice", now);
+        alice.key = Some(key_a);
+        alice.password = Some(Sealed::from_bytes(vec![1]));
+        let identities = [alice.clone()];
+
+        let layer = |parts: &[&str]| HostSettings {
+            identity: parts.contains(&"id").then_some(alice.id),
+            username: parts.contains(&"user").then(|| "bob".to_owned()),
+            key: parts.contains(&"key").then_some(key_b),
+            ..HostSettings::default()
+        };
+        let cases: [Case<'_>; 7] = [
+            (&[], &[], None, None),
+            (&["id"], &[], Some("alice"), Some(key_a)),
+            (&[], &["id"], Some("alice"), Some(key_a)),
+            (&["id"], &["user", "key"], Some("alice"), Some(key_a)),
+            (&["user"], &["id"], Some("bob"), Some(key_a)),
+            (&["id", "user"], &[], Some("bob"), Some(key_a)),
+            (&["key"], &["id"], Some("alice"), Some(key_b)),
+        ];
+        for (host_parts, group_parts, user, key) in cases {
+            let mut group = Group::new("g", None, now);
+            group.settings = layer(group_parts);
+            let mut host = Host::new("h".parse().unwrap(), now);
+            host.settings = layer(host_parts);
+            let s = resolve(&host, &[&group], &identities).settings;
+            assert_eq!(
+                s.username.value.as_deref(),
+                user,
+                "{host_parts:?} {group_parts:?}"
+            );
+            assert_eq!(s.key.value, key, "{host_parts:?} {group_parts:?}");
+        }
+
+        let mut host = Host::new("h".parse().unwrap(), now);
+        host.settings.identity = Some(alice.id);
+        let s = resolve(&host, &[], &identities).settings;
+        assert_eq!(s.password.value, alice.password);
+        assert_eq!(s.password.source, Source::Own);
+        assert_eq!(s.identity.value, Some(alice.id));
+        // A deleted identity adds nothing.
+        let s = resolve(&host, &[], &[]).settings;
+        assert_eq!((s.username.value, s.key.value), (None, None));
+    }
+
     #[test]
     fn inherited_skips_the_own_layer() {
         let now = Timestamp::UNIX_EPOCH;
         let mut group = Group::new("g", None, now);
         group.settings.username = Some("deploy".into());
-        let inherited = EffectiveSettings::inherited(&[&group]);
+        let inherited = EffectiveSettings::inherited(&[&group], &[]);
         assert_eq!(inherited.username.value.as_deref(), Some("deploy"));
         assert_eq!(inherited.username.source, Source::Group(group.id));
         assert_eq!(inherited.port.source, Source::Default);

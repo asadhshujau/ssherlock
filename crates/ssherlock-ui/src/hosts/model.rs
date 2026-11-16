@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use gpui::{App, AppContext as _, Context, Entity, Global, SharedString, Task};
 use ssherlock_core::hosts::{Group, Host};
+use ssherlock_core::keychain::{Identity, Key};
 use ssherlock_core::trash::TrashEntry;
 use ssherlock_core::{Id, Timestamp};
 use ssherlock_store::{Repository, Store, StoreError};
@@ -34,6 +35,8 @@ struct Snapshot {
     hosts: Vec<Host>,
     groups: Vec<Group>,
     trash: Vec<TrashEntry>,
+    keys: Vec<Key>,
+    identities: Vec<Identity>,
 }
 
 impl Snapshot {
@@ -44,6 +47,8 @@ impl Snapshot {
             hosts: store.list()?,
             groups: store.list()?,
             trash,
+            keys: store.list()?,
+            identities: store.list()?,
         })
     }
 }
@@ -149,6 +154,16 @@ impl HostsModel {
     /// The trash, most recently deleted first.
     pub fn trash(&self) -> &[TrashEntry] {
         &self.data.trash
+    }
+
+    /// Every saved key, in no particular order.
+    pub fn keys(&self) -> &[Key] {
+        &self.data.keys
+    }
+
+    /// Every identity, in no particular order. Hosts need them to resolve their credentials.
+    pub fn identities(&self) -> &[Identity] {
+        &self.data.identities
     }
 
     /// The host with `id`, if it's saved.

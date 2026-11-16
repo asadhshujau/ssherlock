@@ -30,6 +30,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "vault",
         sql: include_str!("../migrations/0002_vault.sql"),
     },
+    Migration {
+        version: 3,
+        name: "keychain",
+        sql: include_str!("../migrations/0003_keychain.sql"),
+    },
 ];
 
 /// The newest schema version this build knows.
@@ -149,6 +154,8 @@ mod tests {
                 "groups",
                 "host_tags",
                 "hosts",
+                "identities",
+                "keys",
                 "schema_migrations",
                 "trash",
                 "vault"

@@ -106,7 +106,8 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 - [ ] **KEY-01** Store SSH private keys (encrypted at rest) (Free)
 - [ ] **KEY-02** Store passwords (Free)
-- [ ] **KEY-03** Identities: username + key/password reusable across hosts, change once → applies everywhere (Free)
+- [~] **KEY-03** Identities: username + key/password reusable across hosts, change once → applies everywhere (Free)
+  _Left: logging in with an identity's key and password, and editing identities in the keychain view (rest of Phase 4). A host's user name already comes from its identity._
 - [ ] **KEY-04** Generate keys: Ed25519, ECDSA P-256/384/521, RSA 2048–4096, with passphrase (Free)
 - [ ] **KEY-05** Import keys from file, clipboard, `~/.ssh` scan (Free)
 - [ ] **KEY-06** Export keys: OpenSSH, PEM/PKCS#8, public key only (Free)
@@ -117,7 +118,8 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [ ] **KEY-11** Passphrase caching with timeout (Free)
 - [ ] **KEY-12** Biometric unlock (Touch ID / Windows Hello) and OS keychain integration (Pro)
 - [ ] **KEY-13** Show fingerprint (SHA-256, MD5) and randomart (Free)
-- [ ] **KEY-14** Which hosts use this key / identity (Free)
+- [~] **KEY-14** Which hosts use this key / identity (Free)
+  _Left: showing it in the keychain view (rest of Phase 4). The model works it out, inheritance included._
 - [ ] **KEY-15** Key rotation helper: generate new, push to all hosts using old, retire old (+)
 
 ## 5. Port forwarding (FWD)

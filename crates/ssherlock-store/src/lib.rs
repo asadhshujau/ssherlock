@@ -8,6 +8,7 @@
 
 mod error;
 mod hosts;
+mod keychain;
 mod migrations;
 mod repository;
 mod rows;

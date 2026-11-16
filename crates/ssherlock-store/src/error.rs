@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use ssherlock_core::hosts::{GroupError, HostError};
+use ssherlock_core::keychain::{IdentityError, KeyError};
 
 use crate::KeyLocation;
 
@@ -79,6 +80,12 @@ pub enum StoreError {
     /// A group failed validation, or would end up inside itself, and wasn't saved.
     #[error("could not save the group")]
     InvalidGroup(#[from] GroupError),
+    /// A key failed validation and wasn't saved.
+    #[error("could not save the key")]
+    InvalidKey(#[from] KeyError),
+    /// An identity failed validation and wasn't saved.
+    #[error("could not save the identity")]
+    InvalidIdentity(#[from] IdentityError),
     /// The trash entry to restore doesn't exist (it was already restored or emptied).
     #[error("the trash entry {0} no longer exists")]
     TrashEntryGone(String),
