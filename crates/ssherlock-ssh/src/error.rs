@@ -148,7 +148,7 @@ pub enum SshError {
     /// The server refused a channel request.
     #[error("the server refused to start a {request}")]
     ChannelRequestRefused {
-        /// What was asked for: `pty` or `shell`.
+        /// What was asked for: `pty`, `shell` or `command`.
         request: &'static str,
     },
 
@@ -159,6 +159,22 @@ pub enum SshError {
         kind: &'static str,
         /// The name as given.
         name: String,
+    },
+
+    /// A command run on the server failed.
+    #[error("could not {what} on the server{}", match (status, output.is_empty()) {
+        (Some(code), true) => format!(" (exit status {code})"),
+        (Some(code), false) => format!(" (exit status {code}): {output}"),
+        (None, true) => String::new(),
+        (None, false) => format!(": {output}"),
+    })]
+    RemoteCommand {
+        /// What it was for.
+        what: &'static str,
+        /// Its exit status, if the server sent one.
+        status: Option<u32>,
+        /// What it printed on stderr.
+        output: String,
     },
 
     /// A channel closed before it was ready.
