@@ -48,6 +48,12 @@ SSH client should do, with no paid tier. Built with [gpui](https://crates.io/cra
 | Find in scrollback | Cmd+F | Ctrl+Shift+F |
 | Zoom in / out / reset | Cmd+= / Cmd+- / Cmd+0 | Ctrl+= / Ctrl+- / Ctrl+0 |
 
+On Linux, middle-click pastes the primary selection into terminals and text fields, and
+selecting text (or Ctrl+A in a field) puts it there, when the desktop has middle-click paste
+turned on. GNOME ships it off; turn it on in Settings → Mouse & Touchpad (or with
+`gsettings set org.gnome.desktop.interface gtk-enable-primary-paste true`). SSHerlock reads the
+setting when it starts.
+
 On Linux the shortcuts add Shift so plain Ctrl keys still reach the shell. All of them are in
 [keymap/default.json](crates/ssherlock-ui/src/keymap/default.json). Right-click in a terminal
 for copy, paste, find, clear scrollback and reset.
@@ -202,6 +208,10 @@ sleep 1
 DISPLAY=:99 import -window root target/screenshot.png
 kill "$app" "$xvfb"
 ```
+
+To test middle-click paste in the sandbox, turn the setting on in the sandbox's own dconf:
+`env -u DBUS_SESSION_BUS_ADDRESS HOME="$sandbox" dbus-run-session -- gsettings set
+org.gnome.desktop.interface gtk-enable-primary-paste true`.
 
 Under Xvfb the window can stay black until the first input event: with no window manager,
 nothing asks gpui to draw it. Move the pointer (`xdotool mousemove 600 400`) before the first

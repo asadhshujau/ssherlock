@@ -39,6 +39,7 @@ fn main() -> anyhow::Result<()> {
 
     gpui::Application::new().run(move |cx| {
         ssherlock_ui::init(tokio, cx);
+        ssherlock_ui::platform::detect_primary_paste(cx);
         // Opened in the background; the hosts page says "loading" until it's ready.
         match database {
             Some(path) => {
