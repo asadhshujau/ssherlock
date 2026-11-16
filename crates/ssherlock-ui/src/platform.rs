@@ -105,6 +105,13 @@ pub fn is_link_modifier(modifiers: &gpui::Modifiers) -> bool {
     }
 }
 
+/// The name of gpui's `secondary-` modifier (Cmd on macOS, Ctrl elsewhere), for hints.
+pub const SECONDARY_NAME: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
+
 /// The name of the link modifier, for hints.
 pub const LINK_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
     "Cmd"

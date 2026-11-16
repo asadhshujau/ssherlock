@@ -597,13 +597,31 @@ impl HostList {
             1 => "Move to group".to_owned(),
             n => format!("Move {n} hosts to group"),
         };
-        let picker = cx.new(|cx| Picker::new(placeholder, items, window, cx));
+        let picker = cx.new(|cx| Picker::new(placeholder, items, window, cx).creating("group"));
         let subscription = cx.subscribe_in(&picker, window, move |list, _, event, window, cx| {
-            if let PickerEvent::Picked(index) = event
-                && let Some((group, _)) = choices.get(*index)
-            {
+            let group = match event {
+                PickerEvent::Picked(index) => choices.get(*index).map(|(group, _)| *group),
+                // A new top-level group, saved before the hosts move into it.
+                PickerEvent::Create(name) => {
+                    let group = Group::new(name.as_str(), None, Timestamp::now());
+                    match group.validate() {
+                        Ok(()) => {
+                            let id = group.id;
+                            list.model
+                                .update(cx, |model, cx| model.save_group(group, cx));
+                            Some(Some(id))
+                        }
+                        Err(error) => {
+                            crate::notify::error(&error, cx);
+                            None
+                        }
+                    }
+                }
+                PickerEvent::Dismissed => None,
+            };
+            if let Some(group) = group {
                 let edit = BulkEdit {
-                    group: Change::Set(*group),
+                    group: Change::Set(group),
                     ..BulkEdit::default()
                 };
                 let now = Timestamp::now();
@@ -777,7 +795,13 @@ impl HostList {
                             })
                         })
                         .when(!is_current, |d| d.hover(move |s| s.bg(hover)))
-                        .on_click(cx.listener(move |list, _, _, cx| list.show(section.clone(), cx)))
+                        .on_click(cx.listener(move |list, event: &ClickEvent, window, cx| {
+                            list.show(section.clone(), cx);
+                            // Double-clicking a group edits it.
+                            if event.click_count() == 2 && group.is_some() {
+                                list.edit_group(&EditSelected, window, cx);
+                            }
+                        }))
                         .child(
                             div()
                                 .id(("nav-arrow", index))
@@ -926,6 +950,22 @@ impl HostList {
                             list.empty_trash(&EmptyTrash, window, cx);
                         })),
                 )
+            })
+            // A group's own buttons; E and Delete do the same from the navigation column.
+            .when(self.current_group().is_some(), |d| {
+                d.child(div().flex_1())
+                    .child(
+                        Button::new("edit-group", "Edit group").on_click(cx.listener(
+                            |list, _, window, cx| list.edit_group(&EditSelected, window, cx),
+                        )),
+                    )
+                    .child(
+                        Button::new("trash-group", "Delete group").on_click(cx.listener(
+                            |list, _, window, cx| {
+                                list.trash_group(&TrashGroup, window, cx);
+                            },
+                        )),
+                    )
             });
 
         // Recently used hosts, on the "All hosts" page with no search (APP-16).
@@ -1395,6 +1435,23 @@ mod tests {
         cx.simulate_keystrokes("enter");
         assert_eq!(titles(&f.list, cx), ["c-used", "a-new", "b-old"]);
         assert_eq!(f.list.read_with(cx, |l, _| l.sort), SortOrder::LastUsed);
+    }
+
+    #[gpui::test]
+    fn moving_to_a_new_group_creates_it(cx: &mut TestAppContext) {
+        let (f, cx) = page(&[host("web", "web.example.com")], &[], cx);
+        cx.simulate_keystrokes("m");
+        cx.simulate_input("Fresh");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        f.model.read_with(cx, |m, _| {
+            let fresh = m
+                .groups()
+                .iter()
+                .find(|g| g.name == "Fresh")
+                .expect("created");
+            assert_eq!(m.hosts().first().and_then(|h| h.group), Some(fresh.id));
+        });
     }
 
     #[gpui::test]

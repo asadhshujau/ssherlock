@@ -120,6 +120,8 @@ pub struct HostEditor {
     colour_focus: FocusHandle,
     compression_focus: FocusHandle,
     picker: Option<(Entity<Picker>, Subscription)>,
+    /// Groups created from the group picker, until the model has reloaded with them.
+    created: Vec<Group>,
     focus_handle: FocusHandle,
 }
 
@@ -220,6 +222,7 @@ impl HostEditor {
             colour_focus: cx.focus_handle().tab_stop(true),
             compression_focus: cx.focus_handle().tab_stop(true),
             picker: None,
+            created: Vec::new(),
             focus_handle: cx.focus_handle(),
         };
         editor.update_placeholders(cx);
@@ -351,9 +354,20 @@ impl HostEditor {
     // ── group picker ───────────────────────────────────────────────────────────────────
 
     /// The choices the group field offers, with their labels.
+    /// The saved groups, plus any created here that the model hasn't loaded yet.
+    fn known_groups(&self, cx: &App) -> Vec<Group> {
+        let mut groups = self.model.read(cx).groups().to_vec();
+        for group in &self.created {
+            if !groups.iter().any(|g| g.id == group.id) {
+                groups.push(group.clone());
+            }
+        }
+        groups
+    }
+
     fn group_choices(&self, cx: &App) -> Vec<(Change<Option<Id<Group>>>, String)> {
-        let groups = self.model.read(cx).groups();
-        let tree = GroupTree::new(groups);
+        let groups = self.known_groups(cx);
+        let tree = GroupTree::new(&groups);
         // A group can't go inside itself or anything inside it.
         let excluded = self
             .editing_group_id()
@@ -398,14 +412,22 @@ impl HostEditor {
             .iter()
             .position(|(c, _)| *c == self.group)
             .unwrap_or(0);
-        let picker = cx.new(|cx| Picker::new("Group", items, window, cx).with_selected(current));
+        let picker = cx.new(|cx| {
+            Picker::new("Group, or a new group's name", items, window, cx)
+                .with_selected(current)
+                .creating("group")
+        });
         let subscription = cx.subscribe_in(&picker, window, move |editor, _, event, window, cx| {
-            if let PickerEvent::Picked(index) = event
-                && let Some((choice, _)) = choices.get(*index)
-            {
-                editor.group = choice.clone();
-                editor.errors.remove(&Field::Group);
-                editor.update_placeholders(cx);
+            match event {
+                PickerEvent::Picked(index) => {
+                    if let Some((choice, _)) = choices.get(*index) {
+                        editor.group = choice.clone();
+                        editor.errors.remove(&Field::Group);
+                        editor.update_placeholders(cx);
+                    }
+                }
+                PickerEvent::Create(name) => editor.create_group(name, cx),
+                PickerEvent::Dismissed => {}
             }
             editor.picker = None;
             editor.group_focus.focus(window);
@@ -413,6 +435,22 @@ impl HostEditor {
         });
         self.picker = Some((picker, subscription));
         cx.notify();
+    }
+
+    /// Creates a top-level group called `name` and chooses it. It's saved straight away, ahead
+    /// of the host, so the host can be saved into it even if the editor is then cancelled.
+    fn create_group(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.errors.remove(&Field::Group);
+        let group = Group::new(name, None, Timestamp::now());
+        if let Err(error) = group.validate() {
+            self.fail(Field::Group, error.to_string());
+            return;
+        }
+        self.group = Change::Set(Some(group.id));
+        self.created.push(group.clone());
+        self.model
+            .update(cx, |model, cx| model.save_group(group, cx));
+        self.update_placeholders(cx);
     }
 
     // ── saving ─────────────────────────────────────────────────────────────────────────
@@ -580,7 +618,7 @@ impl HostEditor {
             Err(GroupError::Settings(error)) => self.settings_error(&error, &group.settings),
             Err(error) => self.fail(Field::Name, error.to_string()),
         }
-        let groups = self.model.read(cx).groups().to_vec();
+        let groups = self.known_groups(cx);
         if let Err(error) = GroupTree::new(&groups).check_parent(group.id, group.parent) {
             self.fail(Field::Group, error.to_string());
         }
@@ -1030,7 +1068,10 @@ fn overlay(
                                 .flex_1()
                                 .text_size(theme.text.small_size)
                                 .text_color(theme.colors.text_muted)
-                                .child("Enter saves \u{00b7} Esc cancels \u{00b7} Tab moves between fields"),
+                                .child(format!(
+                                    "Enter or {}+Enter saves \u{00b7} Esc cancels \u{00b7} Tab moves between fields",
+                                    crate::platform::SECONDARY_NAME
+                                )),
                         )
                         .child(Button::new("editor-cancel", "Cancel").on_click(on_cancel))
                         .child(Button::new("editor-save", "Save").style(ButtonStyle::Primary).on_click(on_save)),
@@ -1294,6 +1335,33 @@ mod tests {
             .unwrap();
         assert_eq!(saved.settings.username.as_deref(), Some("deploy"));
         assert_eq!(saved.settings.compression, Some(Compression::On));
+    }
+
+    #[gpui::test]
+    fn a_group_can_be_created_from_the_group_picker(cx: &mut TestAppContext) {
+        let (f, cx) = open(|_| EditorMode::NewHost { group: None }, &[], &[], cx);
+        cx.simulate_input("new.example.com");
+        cx.simulate_keystrokes("tab tab");
+        crate::components::form::tests::press(cx, "enter");
+        assert!(
+            f.editor.read_with(cx, |e, _| e.picker.is_some()),
+            "Enter opens the picker"
+        );
+        cx.simulate_input("Lab");
+        cx.simulate_keystrokes("enter");
+        let label = f.editor.read_with(cx, HostEditor::group_label);
+        assert_eq!(label, "Lab", "chosen before the model has reloaded");
+        // Focus is back on the Group button, where Enter presses it; Ctrl/Cmd+Enter saves.
+        cx.simulate_keystrokes("secondary-enter");
+        cx.run_until_parked();
+        f.model.read_with(cx, |m, _| {
+            let lab = m
+                .groups()
+                .iter()
+                .find(|g| g.name == "Lab")
+                .expect("the group was saved");
+            assert_eq!(m.hosts().first().and_then(|h| h.group), Some(lab.id));
+        });
     }
 
     #[gpui::test]

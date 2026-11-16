@@ -41,10 +41,12 @@ impl PickerItem {
 }
 
 /// What a [`Picker`] reports. Its owner drops it after either.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickerEvent {
     /// The item at this index of the list passed to [`Picker::new`] was chosen.
     Picked(usize),
+    /// "Create …" was chosen for this text (see [`Picker::creating`]).
+    Create(String),
     /// Closed without choosing.
     Dismissed,
 }
@@ -54,8 +56,12 @@ pub struct Picker {
     items: Vec<PickerItem>,
     /// Indices into `items` that match the filter, best first.
     matches: Vec<usize>,
-    /// Index into `matches`.
+    /// Index into the rows: `matches`, plus the create row if shown.
     selected: usize,
+    /// What a new item is called ("group"), if typing a new name offers to create one.
+    create_noun: Option<SharedString>,
+    /// The filter text, trimmed.
+    query: String,
     input: Entity<TextInput>,
     scroll: ScrollHandle,
     _subscription: Subscription,
@@ -91,6 +97,8 @@ impl Picker {
             items,
             matches,
             selected: 0,
+            create_noun: None,
+            query: String::new(),
             input,
             scroll: ScrollHandle::new(),
             _subscription: subscription,
@@ -107,7 +115,33 @@ impl Picker {
         self
     }
 
+    /// Offers to create a new item called `noun` when the typed text isn't an existing item's
+    /// label: a "Create group “…”" row, first when nothing matches and last otherwise.
+    #[must_use]
+    pub fn creating(mut self, noun: impl Into<SharedString>) -> Self {
+        self.create_noun = Some(noun.into());
+        self
+    }
+
+    /// Whether the create row shows, and where: after the matches, or alone.
+    fn create_row(&self) -> Option<usize> {
+        self.create_noun.as_ref()?;
+        if self.query.is_empty() {
+            return None;
+        }
+        let exists = self
+            .items
+            .iter()
+            .any(|item| item.label.eq_ignore_ascii_case(&self.query));
+        (!exists).then_some(self.matches.len())
+    }
+
+    fn row_count(&self) -> usize {
+        self.matches.len() + usize::from(self.create_row().is_some())
+    }
+
     fn filter(&mut self, query: &str) {
+        query.trim().clone_into(&mut self.query);
         let indices: Vec<usize> = (0..self.items.len()).collect();
         self.matches = fuzzy::filter(indices, query, |&index| {
             self.items
@@ -120,7 +154,7 @@ impl Picker {
     }
 
     fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let count = self.matches.len();
+        let count = self.row_count();
         if count == 0 {
             return;
         }
@@ -136,6 +170,8 @@ impl Picker {
     fn pick(&mut self, position: usize, cx: &mut Context<Self>) {
         if let Some(&index) = self.matches.get(position) {
             cx.emit(PickerEvent::Picked(index));
+        } else if self.create_row() == Some(position) {
+            cx.emit(PickerEvent::Create(self.query.clone()));
         }
     }
 
@@ -204,7 +240,25 @@ impl Render for Picker {
                         }),
                 )
             });
-        let is_empty = self.matches.is_empty();
+        let create = self
+            .create_row()
+            .zip(self.create_noun.clone())
+            .map(|(position, noun)| {
+                let is_selected = position == self.selected;
+                let hover = theme.colors.control_hover;
+                div()
+                    .id("picker-create")
+                    .px(theme.spacing.md)
+                    .py(theme.spacing.sm)
+                    .rounded(theme.radius.sm)
+                    .cursor_pointer()
+                    .text_color(theme.colors.accent)
+                    .when(is_selected, |d| d.bg(theme.colors.control_hover))
+                    .when(!is_selected, |d| d.hover(move |s| s.bg(hover)))
+                    .on_click(cx.listener(move |picker, _, _, cx| picker.pick(position, cx)))
+                    .child(format!("Create {noun} \u{201c}{}\u{201d}", self.query))
+            });
+        let is_empty = self.matches.is_empty() && create.is_none();
         div()
             .key_context("Picker")
             .on_action(cx.listener(Self::select_next))
@@ -243,6 +297,7 @@ impl Render for Picker {
                             .flex()
                             .flex_col()
                             .children(rows)
+                            .children(create)
                             .when(is_empty, |d| {
                                 d.child(
                                     div()
@@ -277,14 +332,23 @@ mod tests {
     }
 
     fn run(keys: &str, typed: &str, cx: &mut TestAppContext) -> (Vec<PickerEvent>, Vec<String>) {
+        run_with(keys, typed, |picker| picker, cx)
+    }
+
+    fn run_with(
+        keys: &str,
+        typed: &str,
+        setup: impl FnOnce(Picker) -> Picker,
+        cx: &mut TestAppContext,
+    ) -> (Vec<PickerEvent>, Vec<String>) {
         cx.update(crate::keymap::init);
         let (picker, cx) =
-            cx.add_window_view(|window, cx| Picker::new("Group", items(), window, cx));
+            cx.add_window_view(|window, cx| setup(Picker::new("Group", items(), window, cx)));
         let seen = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&seen);
         let _subscription = cx.update(|_, cx| {
             cx.subscribe(&picker, move |_, event: &PickerEvent, _| {
-                sink.borrow_mut().push(*event);
+                sink.borrow_mut().push(event.clone());
             })
         });
         cx.run_until_parked();
@@ -324,6 +388,31 @@ mod tests {
     fn escape_dismisses(cx: &mut TestAppContext) {
         let (events, _) = run("escape", "", cx);
         assert_eq!(events, [PickerEvent::Dismissed]);
+    }
+
+    #[gpui::test]
+    fn a_new_name_can_be_created(cx: &mut TestAppContext) {
+        let (events, _) = run_with("enter", " Databases ", |p| p.creating("group"), cx);
+        assert_eq!(events, [PickerEvent::Create("Databases".into())]);
+    }
+
+    #[gpui::test]
+    fn create_comes_after_the_matches(cx: &mut TestAppContext) {
+        // "prod" matches two groups; Enter still picks the first, Up wraps to "Create".
+        let (events, _) = run_with("enter", "prod", |p| p.creating("group"), cx);
+        assert_eq!(events, [PickerEvent::Picked(0)]);
+    }
+
+    #[gpui::test]
+    fn up_from_the_first_match_reaches_create(cx: &mut TestAppContext) {
+        let (events, _) = run_with("up enter", "prod", |p| p.creating("group"), cx);
+        assert_eq!(events, [PickerEvent::Create("prod".into())]);
+    }
+
+    #[gpui::test]
+    fn an_existing_name_is_not_offered_again(cx: &mut TestAppContext) {
+        let (events, _) = run_with("up enter", "staging", |p| p.creating("group"), cx);
+        assert_eq!(events, [PickerEvent::Picked(1)]);
     }
 
     #[gpui::test]

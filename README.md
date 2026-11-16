@@ -14,11 +14,12 @@ SSH client should do, with no paid tier. Built with [gpui](https://crates.io/cra
 
 - **Local terminals** in tabs: rename, reorder, search the scrollback, copy and paste, open
   links, zoom.
-- **Saved hosts** on the **Hosts** tab, in front of the terminal tabs. Group them (groups nest,
+- **Saved hosts** on the **Hosts** tab, where SSHerlock opens, in front of the terminal tabs.
+  Group them (groups nest,
   and a host inherits the port, user, colour, algorithms and compression of its groups unless it
   sets its own), tag them, star favourites, and search as you type. Sort by name, last use or
   creation, in a list or a grid. Select several to connect to all of them, edit them together or
-  move them to a group. Deleted hosts and groups go to the trash, where they can be restored.
+  move them to a group (typing a new name in a group picker creates the group). Deleted hosts and groups go to the trash, where they can be restored.
   The whole page works from the keyboard: arrows, Shift to select, Enter to connect, N new
   host, E edit, F favourite, Delete to trash, / to search, Tab between the parts.
 - **SSH via quick connect.** Type `user@host`, `user@host:port` or `ssh://user@host:port`, or part
@@ -202,7 +203,9 @@ DISPLAY=:99 import -window root target/screenshot.png
 kill "$app" "$xvfb"
 ```
 
-Three things are expected under Xvfb and aren't bugs. There is no title bar, because no window
+Under Xvfb the window can stay black until the first input event: with no window manager,
+nothing asks gpui to draw it. Move the pointer (`xdotool mousemove 600 400`) before the first
+screenshot. Three more things are expected under Xvfb and aren't bugs. There is no title bar, because no window
 manager is running, so gpui falls back to server-side decorations. The log has a "Found no
 xinput mouse pointers" error, because Xvfb has no input devices. Opening a link logs "Failed to
 open with dbus", because the bus is disabled on purpose.
