@@ -92,7 +92,7 @@ impl QuickConnectBar {
                     .into_iter()
                     .take(MAX_SUGGESTIONS)
                     .map(|host| {
-                        let request = ConnectRequest::new(host, model.groups());
+                        let request = ConnectRequest::new(host, model.groups(), model.identities());
                         Choice::Saved {
                             host: host.id,
                             title: host.title().into_owned().into(),
@@ -132,7 +132,7 @@ impl QuickConnectBar {
                     let model = model.read(cx);
                     model
                         .host(host)
-                        .map(|h| ConnectRequest::new(h, model.groups()))
+                        .map(|h| ConnectRequest::new(h, model.groups(), model.identities()))
                 });
                 if let Some(request) = request {
                     cx.emit(QuickConnectEvent::ConnectSaved(request));

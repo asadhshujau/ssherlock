@@ -5,13 +5,19 @@ use serde::{Deserialize, Serialize};
 
 use super::Colour;
 use crate::algorithms::{AlgorithmPreferences, Compression};
+use crate::id::Id;
+use crate::keychain::{Identity, Key};
 use crate::port::Port;
+use crate::secret::Sealed;
 
 /// Settings shared by hosts and groups. Each field left unset (`None`, or an empty algorithm
 /// list) is inherited from the nearest group that sets it, else SSHerlock's default.
 ///
-/// Later phases add fields here (identity, environment, terminal settings) and get inheritance
-/// for free; every new field must be `#[serde(default)]` so saved data still loads.
+/// Later phases add fields here (environment, terminal settings) and get inheritance for free;
+/// every new field must be `#[serde(default)]` so saved data still loads.
+///
+/// An [`Identity`] fills in the user name, key and password of the layer that picks it, where
+/// that layer leaves them unset; see [`resolve`](super::resolve).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HostSettings {
@@ -25,6 +31,12 @@ pub struct HostSettings {
     pub algorithms: AlgorithmPreferences,
     /// Whether to compress. Default off.
     pub compression: Option<Compression>,
+    /// The identity to log in with (KEY-03). Default: none.
+    pub identity: Option<Id<Identity>>,
+    /// The key to log in with, tried before the agent and `~/.ssh` keys. Default: none.
+    pub key: Option<Id<Key>>,
+    /// The saved password, sealed by the vault (KEY-02). Default: ask when needed.
+    pub password: Option<Sealed>,
 }
 
 /// Why [`HostSettings`] can't be saved.

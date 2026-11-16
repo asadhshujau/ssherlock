@@ -18,7 +18,8 @@ use ssherlock_core::hosts::{
     BulkEdit, Change, Colour, EffectiveSettings, Group, GroupError, GroupTree, Host, HostError,
     HostSettings, Resolved, SettingsError, Source, Tag,
 };
-use ssherlock_core::{Address, AlgorithmPreferences, Compression, Id, Timestamp};
+use ssherlock_core::keychain::{Identity, Key};
+use ssherlock_core::{Address, AlgorithmPreferences, Compression, Id, Sealed, Timestamp};
 use ssherlock_ssh::SshError;
 
 use super::actions::{CancelEditor, SaveEditor};
@@ -104,6 +105,14 @@ struct Inputs {
     mac: Entity<TextInput>,
 }
 
+/// The credential settings a host or group picks.
+#[derive(Clone, Debug, Default)]
+struct Credentials {
+    identity: Option<Id<Identity>>,
+    key: Option<Id<Key>>,
+    password: Option<Sealed>,
+}
+
 /// The form for a host, a group, or many hosts.
 pub struct HostEditor {
     model: Entity<HostsModel>,
@@ -113,6 +122,9 @@ pub struct HostEditor {
     group: Change<Option<Id<Group>>>,
     colour: Change<Option<Colour>>,
     compression: Option<Compression>,
+    /// The identity, key and saved password, carried through unchanged until the editor gets
+    /// fields for them.
+    credentials: Credentials,
     is_favourite: Change<bool>,
     errors: HashMap<Field, SharedString>,
     group_focus: FocusHandle,
@@ -208,9 +220,15 @@ impl HostEditor {
             EditorMode::Bulk(_) => &inputs.tags,
         };
         first.focus_handle(cx).focus(window);
+        let credentials = Credentials {
+            identity: settings.identity,
+            key: settings.key,
+            password: settings.password.clone(),
+        };
         let mut editor = Self {
             model,
             compression: settings.compression,
+            credentials,
             mode,
             inputs,
             group,
@@ -252,9 +270,12 @@ impl HostEditor {
         let Change::Set(group) = self.group else {
             return None;
         };
-        let groups = self.model.read(cx).groups();
-        let tree = GroupTree::new(groups);
-        Some(EffectiveSettings::inherited(&tree.ancestors(group)))
+        let model = self.model.read(cx);
+        let tree = GroupTree::new(model.groups());
+        Some(EffectiveSettings::inherited(
+            &tree.ancestors(group),
+            model.identities(),
+        ))
     }
 
     /// Puts what would be inherited into the empty fields' placeholders.
@@ -489,6 +510,9 @@ impl HostEditor {
                 mac: fields::algorithms(&Self::text(&self.inputs.mac, cx)),
             },
             compression: self.compression,
+            identity: self.credentials.identity,
+            key: self.credentials.key,
+            password: self.credentials.password.clone(),
         }
     }
 
@@ -1241,8 +1265,12 @@ mod tests {
         let mut host = Host::new("old.example.com".parse().unwrap(), at(1));
         host.last_connected_at = Some(at(5));
         host.settings.algorithms.kex = vec!["curve25519-sha256".into()];
+        host.settings.key = Some(Id::generate());
+        host.settings.identity = Some(Id::generate());
+        host.settings.password = Some(Sealed::from_bytes(vec![1, 2, 3]));
         let id = host.id;
         let original = host.clone();
+        let credentials = host.settings.clone();
         let (f, cx) = open(move |_| EditorMode::EditHost(original), &[host], &[], cx);
         f.editor.update(cx, |editor, cx| {
             editor
@@ -1257,6 +1285,14 @@ mod tests {
         assert_eq!(saved.created_at, at(1));
         assert_eq!(saved.last_connected_at, Some(at(5)));
         assert_eq!(saved.settings.algorithms.kex, ["curve25519-sha256"]);
+        assert_eq!(
+            (
+                saved.settings.key,
+                saved.settings.identity,
+                saved.settings.password
+            ),
+            (credentials.key, credentials.identity, credentials.password)
+        );
     }
 
     #[gpui::test]

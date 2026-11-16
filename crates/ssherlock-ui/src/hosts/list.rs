@@ -400,7 +400,7 @@ impl HostList {
         let requests: Vec<ConnectRequest> = ids
             .iter()
             .filter_map(|&id| model.host(id))
-            .map(|host| ConnectRequest::new(host, model.groups()))
+            .map(|host| ConnectRequest::new(host, model.groups(), model.identities()))
             .collect();
         if !requests.is_empty() {
             cx.emit(HostListEvent::Connect(requests));
@@ -733,7 +733,7 @@ impl HostList {
         let model = self.model.read(cx);
         let tree = GroupTree::new(model.groups());
         let summarise = |host: &Host| {
-            let effective = resolve(host, &tree.ancestors(host.group));
+            let effective = resolve(host, &tree.ancestors(host.group), model.identities());
             let target = ConnectTarget {
                 user: effective.settings.username.value.clone(),
                 address: effective.address.clone(),

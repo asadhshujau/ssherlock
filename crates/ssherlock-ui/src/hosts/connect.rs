@@ -3,6 +3,7 @@
 //! the same way from either.
 
 use ssherlock_core::hosts::{Colour, Group, GroupTree, Host, resolve};
+use ssherlock_core::keychain::Identity;
 use ssherlock_core::{ConnectTarget, Id, Port};
 
 use crate::ssh::ConnectOptions;
@@ -21,10 +22,10 @@ pub struct ConnectRequest {
 }
 
 impl ConnectRequest {
-    /// The request for `host`, inheriting from `groups`.
-    pub fn new(host: &Host, groups: &[Group]) -> Self {
+    /// The request for `host`, inheriting from `groups` and the `identities` they pick.
+    pub fn new(host: &Host, groups: &[Group], identities: &[Identity]) -> Self {
         let tree = GroupTree::new(groups);
-        let effective = resolve(host, &tree.ancestors(host.group));
+        let effective = resolve(host, &tree.ancestors(host.group), identities);
         let settings = effective.settings;
         Self {
             host: host.id,
@@ -75,7 +76,7 @@ mod tests {
         host.group = Some(group.id);
         host.settings.port = Port::new(2222);
 
-        let request = ConnectRequest::new(&host, &[group]);
+        let request = ConnectRequest::new(&host, &[group], &[]);
         assert_eq!(request.target.to_string(), "ops@db.example.com:2222");
         assert_eq!(request.colour, Some(Colour::Red));
         assert_eq!(request.options.compression, Compression::On);
@@ -83,6 +84,16 @@ mod tests {
             request.options.algorithms.cipher,
             ["aes256-gcm@openssh.com"]
         );
+    }
+
+    #[test]
+    fn the_user_name_can_come_from_an_identity() {
+        let now = Timestamp::UNIX_EPOCH;
+        let identity = Identity::new("deploy", now);
+        let mut host = Host::new("example.com".parse().unwrap(), now);
+        host.settings.identity = Some(identity.id);
+        let request = ConnectRequest::new(&host, &[], &[identity]);
+        assert_eq!(request.target.user.as_deref(), Some("deploy"));
     }
 
     #[test]
