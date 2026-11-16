@@ -15,16 +15,18 @@ use gpui::{
     div,
 };
 use ssherlock_core::hosts::search::{self, HostQuery, Scope, SortOrder};
-use ssherlock_core::hosts::{Group, GroupTree, Host, resolve};
+use ssherlock_core::hosts::{BulkEdit, Change, Group, GroupTree, Host, resolve};
 use ssherlock_core::{ConnectTarget, Id, Port, Timestamp, time};
 
 use super::actions::{
     ChangeSort, ClearSearch, ClearSelection, CollapseGroup, ConnectSelected, DeleteForever,
-    EmptyTrash, ExpandGroup, ExtendNext, ExtendPrevious, ExtendToFirst, ExtendToLast, FocusList,
-    FocusSearch, Restore, SelectAll, SelectFirst, SelectLast, SelectNext, SelectPrevious,
-    ToggleFavourite, ToggleLayout, ToggleSelected, TrashSelected,
+    DuplicateSelected, EditSelected, EmptyTrash, ExpandGroup, ExtendNext, ExtendPrevious,
+    ExtendToFirst, ExtendToLast, FocusList, FocusSearch, MoveToGroup, NewGroup, NewHost, Restore,
+    SelectAll, SelectFirst, SelectLast, SelectNext, SelectPrevious, ToggleFavourite, ToggleLayout,
+    ToggleSelected, TrashGroup, TrashSelected,
 };
 use super::detail::{CaseFile, case_file};
+use super::editor::{EditorMode, HostEditor, HostEditorEvent, Saved};
 use super::item::{HostItem, HostSummary, Layout, mark};
 use super::model::{HostsModel, LoadState};
 use super::nav::{self, NavItem, Section};
@@ -68,7 +70,11 @@ pub struct HostList {
     visible: Vec<Host>,
     /// Index of the trash entry under the cursor.
     trash_cursor: usize,
-    sort_picker: Option<(Entity<Picker>, Subscription)>,
+    /// A picker open over the page (sort order, or a group to move hosts to).
+    picker: Option<(Entity<Picker>, Subscription)>,
+    editor: Option<(Entity<HostEditor>, Subscription)>,
+    /// A host just saved, to put the cursor on once it shows up.
+    pending_cursor: Option<Id<Host>>,
     nav_focus: FocusHandle,
     list_focus: FocusHandle,
     list_scroll: ScrollHandle,
@@ -79,7 +85,10 @@ impl EventEmitter<HostListEvent> for HostList {}
 
 impl Focusable for HostList {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match &self.sort_picker {
+        if let Some((editor, _)) = &self.editor {
+            return editor.focus_handle(cx);
+        }
+        match &self.picker {
             Some((picker, _)) => picker.focus_handle(cx),
             None => self.list_focus.clone(),
         }
@@ -89,8 +98,7 @@ impl Focusable for HostList {
 impl HostList {
     /// The page over `model`.
     pub fn new(model: Entity<HostsModel>, cx: &mut Context<Self>) -> Self {
-        let search = cx
-            .new(|cx| TextInput::field("", cx).placeholder("Search hosts, addresses, tags, notes"));
+        let search = cx.new(|cx| TextInput::field("", cx).placeholder("Search hosts"));
         let subscriptions = vec![
             cx.observe(&model, |list, _, cx| list.refresh(cx)),
             cx.subscribe(&search, |list, _, event: &TextInputEvent, cx| {
@@ -109,7 +117,9 @@ impl HostList {
             selection: Selection::default(),
             visible: Vec::new(),
             trash_cursor: 0,
-            sort_picker: None,
+            picker: None,
+            editor: None,
+            pending_cursor: None,
             nav_focus: cx.focus_handle().tab_stop(true),
             list_focus: cx.focus_handle().tab_stop(true),
             list_scroll: ScrollHandle::new(),
@@ -173,6 +183,13 @@ impl HostList {
         self.trash_cursor = self.trash_cursor.min(model.trash().len().saturating_sub(1));
         let ids = self.visible_ids();
         self.selection.retain(&ids, old_position);
+        if let Some(id) = self.pending_cursor
+            && ids.contains(&id)
+        {
+            self.pending_cursor = None;
+            self.selection.click(id);
+            self.after_cursor_move(cx);
+        }
         cx.notify();
     }
 
@@ -453,11 +470,11 @@ impl HostList {
                 list.sort = *order;
                 list.refresh(cx);
             }
-            list.sort_picker = None;
+            list.picker = None;
             list.list_focus.focus(window);
             cx.notify();
         });
-        self.sort_picker = Some((picker, subscription));
+        self.picker = Some((picker, subscription));
         cx.notify();
     }
 
@@ -477,6 +494,153 @@ impl HostList {
     fn clear_search(&mut self, _: &ClearSearch, window: &mut Window, cx: &mut Context<Self>) {
         self.search.update(cx, |search, cx| search.set_text("", cx));
         self.list_focus.focus(window);
+    }
+
+    // ── editing ────────────────────────────────────────────────────────────────────────
+
+    fn open_editor(&mut self, mode: EditorMode, window: &mut Window, cx: &mut Context<Self>) {
+        let model = self.model.clone();
+        let editor = cx.new(|cx| HostEditor::new(model, mode, window, cx));
+        let subscription = cx.subscribe_in(&editor, window, |list, _, event, window, cx| {
+            let HostEditorEvent::Done(saved) = event;
+            if let Some(Saved::Host(id)) = saved {
+                list.pending_cursor = Some(*id);
+            }
+            if let Some(Saved::Group(id)) = saved {
+                list.expanded.extend(list.parent_of(*id, cx));
+            }
+            list.editor = None;
+            list.list_focus.focus(window);
+            cx.notify();
+        });
+        self.editor = Some((editor, subscription));
+        cx.notify();
+    }
+
+    fn parent_of(&self, id: Id<Group>, cx: &App) -> Option<Id<Group>> {
+        self.model
+            .read(cx)
+            .groups()
+            .iter()
+            .find(|g| g.id == id)
+            .and_then(|g| g.parent)
+    }
+
+    fn new_host(&mut self, _: &NewHost, window: &mut Window, cx: &mut Context<Self>) {
+        let group = self.current_group();
+        self.open_editor(EditorMode::NewHost { group }, window, cx);
+    }
+
+    fn new_group(&mut self, _: &NewGroup, window: &mut Window, cx: &mut Context<Self>) {
+        let parent = self.current_group();
+        self.open_editor(EditorMode::NewGroup { parent }, window, cx);
+    }
+
+    /// Edits the host under the cursor, or all the selected hosts at once.
+    fn edit_selected(&mut self, _: &EditSelected, window: &mut Window, cx: &mut Context<Self>) {
+        let targets = self.targets();
+        let mode = match targets.as_slice() {
+            [] => return,
+            [id] => match self.model.read(cx).host(*id) {
+                Some(host) => EditorMode::EditHost(host.clone()),
+                None => return,
+            },
+            _ => EditorMode::Bulk(targets),
+        };
+        self.open_editor(mode, window, cx);
+    }
+
+    /// Edits the group selected in the navigation column.
+    fn edit_group(&mut self, _: &EditSelected, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.current_group() else {
+            return;
+        };
+        let group = self
+            .model
+            .read(cx)
+            .groups()
+            .iter()
+            .find(|g| g.id == id)
+            .cloned();
+        if let Some(group) = group {
+            self.open_editor(EditorMode::EditGroup(group), window, cx);
+        }
+    }
+
+    fn trash_group(&mut self, _: &TrashGroup, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.current_group() {
+            self.model.update(cx, |model, cx| model.trash_group(id, cx));
+        }
+    }
+
+    fn duplicate_selected(
+        &mut self,
+        _: &DuplicateSelected,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let now = Timestamp::now();
+        let model = self.model.read(cx);
+        let copies: Vec<Host> = self
+            .targets()
+            .iter()
+            .filter_map(|id| model.host(*id))
+            .map(|host| host.duplicate(now))
+            .collect();
+        self.pending_cursor = copies.first().map(|h| h.id);
+        if !copies.is_empty() {
+            self.model
+                .update(cx, |model, cx| model.save_hosts(copies, cx));
+        }
+    }
+
+    /// Opens a picker to move the selected hosts into a group (HOST-08).
+    fn move_to_group(&mut self, _: &MoveToGroup, window: &mut Window, cx: &mut Context<Self>) {
+        let targets = self.targets();
+        if targets.is_empty() {
+            return;
+        }
+        let model = self.model.read(cx);
+        let tree = GroupTree::new(model.groups());
+        let mut choices: Vec<(Option<Id<Group>>, String)> = vec![(None, "No group".to_owned())];
+        choices.extend(
+            tree.rows(|_| true)
+                .into_iter()
+                .map(|row| (Some(row.group.id), tree.path(row.group.id))),
+        );
+        let items = choices
+            .iter()
+            .map(|(_, label)| PickerItem::new(label.clone()))
+            .collect();
+        let placeholder = match targets.len() {
+            1 => "Move to group".to_owned(),
+            n => format!("Move {n} hosts to group"),
+        };
+        let picker = cx.new(|cx| Picker::new(placeholder, items, window, cx));
+        let subscription = cx.subscribe_in(&picker, window, move |list, _, event, window, cx| {
+            if let PickerEvent::Picked(index) = event
+                && let Some((group, _)) = choices.get(*index)
+            {
+                let edit = BulkEdit {
+                    group: Change::Set(*group),
+                    ..BulkEdit::default()
+                };
+                let now = Timestamp::now();
+                let model = list.model.read(cx);
+                let moved: Vec<Host> = targets
+                    .iter()
+                    .filter_map(|id| model.host(*id))
+                    .map(|host| edit.apply(host, now))
+                    .collect();
+                list.model
+                    .update(cx, |model, cx| model.save_hosts(moved, cx));
+            }
+            list.picker = None;
+            list.list_focus.focus(window);
+            cx.notify();
+        });
+        self.picker = Some((picker, subscription));
+        cx.notify();
     }
 
     // ── trash ──────────────────────────────────────────────────────────────────────────
@@ -559,8 +723,11 @@ impl Render for HostList {
             .text_size(theme.text.ui_size)
             .text_color(theme.colors.text)
             .child(body)
-            .when_some(self.sort_picker.as_ref(), |d, (picker, _)| {
+            .when_some(self.picker.as_ref(), |d, (picker, _)| {
                 d.child(picker.clone())
+            })
+            .when_some(self.editor.as_ref(), |d, (editor, _)| {
+                d.child(editor.clone())
             })
     }
 }
@@ -685,6 +852,10 @@ impl HostList {
             .on_action(cx.listener(Self::nav_last))
             .on_action(cx.listener(Self::expand_group))
             .on_action(cx.listener(Self::collapse_group))
+            .on_action(cx.listener(Self::new_host))
+            .on_action(cx.listener(Self::new_group))
+            .on_action(cx.listener(Self::edit_group))
+            .on_action(cx.listener(Self::trash_group))
             .on_action(cx.listener(Self::focus_list))
             .on_action(cx.listener(Self::focus_search))
             .flex()
@@ -717,6 +888,18 @@ impl HostList {
                     .flex_1()
                     .min_w_0()
                     .child(self.search.clone()),
+            )
+            .child(
+                Button::new("new-host", "New host")
+                    .style(ButtonStyle::Primary)
+                    .on_click(
+                        cx.listener(|list, _, window, cx| list.new_host(&NewHost, window, cx)),
+                    ),
+            )
+            .child(
+                Button::new("new-group", "New group").on_click(
+                    cx.listener(|list, _, window, cx| list.new_group(&NewGroup, window, cx)),
+                ),
             )
             .child(
                 Button::new("sort", format!("Sort: {}", self.sort.label())).on_click(
@@ -931,6 +1114,11 @@ impl HostList {
             .on_action(cx.listener(Self::change_sort))
             .on_action(cx.listener(Self::toggle_layout))
             .on_action(cx.listener(Self::focus_search))
+            .on_action(cx.listener(Self::new_host))
+            .on_action(cx.listener(Self::new_group))
+            .on_action(cx.listener(Self::edit_selected))
+            .on_action(cx.listener(Self::duplicate_selected))
+            .on_action(cx.listener(Self::move_to_group))
             .on_action(cx.listener(Self::restore))
             .on_action(cx.listener(Self::delete_forever))
             .on_action(cx.listener(Self::empty_trash))
@@ -956,6 +1144,10 @@ impl HostList {
                     theme,
                     now,
                     cx.listener(move |list, _, _, cx| list.connect(&[id], cx)),
+                    cx.listener(move |list, _, window, cx| {
+                        list.selection.click(id);
+                        list.edit_selected(&EditSelected, window, cx);
+                    }),
                 )
             });
 
@@ -1232,6 +1424,59 @@ mod tests {
         cx.simulate_keystrokes("enter");
         assert_eq!(titles(&f.list, cx), ["c-used", "a-new", "b-old"]);
         assert_eq!(f.list.read_with(cx, |l, _| l.sort), SortOrder::LastUsed);
+    }
+
+    #[gpui::test]
+    fn new_duplicate_move_and_bulk_edit_from_the_keyboard(cx: &mut TestAppContext) {
+        let prod = Group::new("prod", None, at(0));
+        let (f, cx) = page(
+            &[host("web", "web.example.com")],
+            std::slice::from_ref(&prod),
+            cx,
+        );
+
+        // N opens the editor; typing an address and Enter saves, and the cursor lands on it.
+        cx.simulate_keystrokes("n");
+        assert!(f.list.read_with(cx, |l, _| l.editor.is_some()));
+        cx.simulate_input("api.example.com");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(f.list.read_with(cx, |l, _| l.editor.is_none()));
+        assert_eq!(titles(&f.list, cx), ["api.example.com", "web"]);
+        assert_eq!(
+            cursor_title(&f.list, cx).as_deref(),
+            Some("api.example.com")
+        );
+
+        // Ctrl/Cmd+D duplicates.
+        cx.simulate_keystrokes("secondary-d");
+        cx.run_until_parked();
+        assert_eq!(
+            titles(&f.list, cx),
+            ["api.example.com", "api.example.com (copy)", "web"]
+        );
+
+        // M moves the selection into a group.
+        cx.simulate_keystrokes("secondary-a m");
+        cx.simulate_input("prod");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let in_prod = f.model.read_with(cx, |m, _| {
+            m.hosts()
+                .iter()
+                .filter(|h| h.group == Some(prod.id))
+                .count()
+        });
+        assert_eq!(in_prod, 3);
+
+        // E with several selected opens one editor for all of them.
+        cx.simulate_keystrokes("secondary-a e");
+        let bulk = f.list.read_with(cx, |l, cx| {
+            l.editor.as_ref().map(|(e, _)| e.read(cx).title())
+        });
+        assert_eq!(bulk.as_deref(), Some("Edit 3 hosts"));
+        cx.simulate_keystrokes("escape");
+        assert!(f.list.read_with(cx, |l, _| l.editor.is_none()));
     }
 
     #[test]

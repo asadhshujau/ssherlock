@@ -1,5 +1,6 @@
 //! Actions of the hosts page. Each is bound in `keymap/default.json` under the key context of
-//! the part of the page it acts on: `HostNav`, `HostList`, `HostSearch` or `Trash`.
+//! the part of the page it acts on: `HostNav`, `HostList`, `HostSearch`, `Trash` or
+//! `HostEditor`.
 
 use gpui::actions;
 
@@ -54,5 +55,22 @@ actions!(
         DeleteForever,
         /// Deletes everything in the trash for good.
         EmptyTrash,
+        /// Opens the editor for a new host (in the group shown, if any).
+        NewHost,
+        /// Opens the editor for a new group (inside the group shown, if any).
+        NewGroup,
+        /// Edits the host under the cursor, the selected hosts together, or the group selected
+        /// in the navigation column.
+        EditSelected,
+        /// Saves copies of the selected hosts.
+        DuplicateSelected,
+        /// Moves the selected hosts into a group.
+        MoveToGroup,
+        /// Moves the group selected in the navigation column, and everything in it, to the trash.
+        TrashGroup,
+        /// Saves the editor's changes.
+        SaveEditor,
+        /// Closes the editor without saving.
+        CancelEditor,
     ]
 );

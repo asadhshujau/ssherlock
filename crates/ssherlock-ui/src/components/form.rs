@@ -23,6 +23,8 @@ actions!(
         FocusPrevious,
         /// Turns the focused checkbox on or off.
         Toggle,
+        /// Presses the focused button.
+        Activate,
     ]
 );
 
@@ -178,7 +180,7 @@ impl RenderOnce for FormField {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use gpui::{
@@ -234,6 +236,28 @@ mod tests {
         }
     }
 
+    /// Presses and releases `key`, as a keyboard does. `simulate_keystrokes` sends no release,
+    /// and gpui clicks a focused element on the release of Enter or Space.
+    pub(crate) fn press(cx: &mut gpui::VisualTestContext, key: &str) {
+        cx.simulate_keystrokes(key);
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse(key).unwrap(),
+        });
+        cx.run_until_parked();
+    }
+
+    /// Regression: Space toggled a checkbox on the key-down and the key-up's click toggled it
+    /// back, so on a real keyboard it did nothing. Each full press must toggle once.
+    #[gpui::test]
+    fn each_press_of_space_toggles_a_checkbox_once(cx: &mut TestAppContext) {
+        let (view, cx) = sample(cx);
+        cx.update(|window, cx| view.read(cx).checkbox.focus(window));
+        press(cx, "space");
+        assert!(view.read_with(cx, |view, _| view.is_checked));
+        press(cx, "space");
+        assert!(!view.read_with(cx, |view, _| view.is_checked));
+    }
+
     fn sample(cx: &mut TestAppContext) -> (Entity<Sample>, &mut gpui::VisualTestContext) {
         cx.update(crate::keymap::init);
         let (view, cx) = cx.add_window_view(|window, cx| {
@@ -258,7 +282,9 @@ mod tests {
         cx.simulate_input("a");
         cx.simulate_keystrokes("tab");
         cx.simulate_input("b");
-        cx.simulate_keystrokes("tab space tab right right");
+        cx.simulate_keystrokes("tab");
+        press(cx, "space");
+        cx.simulate_keystrokes("tab right right");
         cx.run_until_parked();
         view.read_with(cx, |view, cx| {
             assert_eq!(view.first.read(cx).text(), "a");

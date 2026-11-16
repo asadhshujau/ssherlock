@@ -46,7 +46,12 @@
       "right": "hosts::ExpandGroup",
       "left": "hosts::CollapseGroup",
       "enter": "hosts::FocusList",
-      "/": "hosts::FocusSearch"
+      "/": "hosts::FocusSearch",
+      "n": "hosts::NewHost",
+      "shift-n": "hosts::NewGroup",
+      "e": "hosts::EditSelected",
+      "f2": "hosts::EditSelected",
+      "delete": "hosts::TrashGroup"
     }
   },
   {
@@ -79,7 +84,22 @@
       "backspace": "hosts::TrashSelected",
       "s": "hosts::ChangeSort",
       "v": "hosts::ToggleLayout",
-      "/": "hosts::FocusSearch"
+      "/": "hosts::FocusSearch",
+      "n": "hosts::NewHost",
+      "shift-n": "hosts::NewGroup",
+      "e": "hosts::EditSelected",
+      "f2": "hosts::EditSelected",
+      "secondary-d": "hosts::DuplicateSelected",
+      "m": "hosts::MoveToGroup"
+    }
+  },
+  {
+    "context": "HostEditor",
+    "bindings": {
+      "enter": "hosts::SaveEditor",
+      "secondary-enter": "hosts::SaveEditor",
+      "secondary-s": "hosts::SaveEditor",
+      "escape": "hosts::CancelEditor"
     }
   },
   {
@@ -167,6 +187,13 @@
     "bindings": {
       "tab": "form::FocusNext",
       "shift-tab": "form::FocusPrevious"
+    }
+  },
+  {
+    "context": "Button",
+    "bindings": {
+      "enter": "form::Activate",
+      "space": "form::Activate"
     }
   },
   {

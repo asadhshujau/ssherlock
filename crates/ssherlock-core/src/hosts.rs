@@ -5,6 +5,7 @@
 //! settings a host ends up with after inheriting from its groups, and [`search`] filters, sorts
 //! and ranks hosts for the host list and the quick connect bar.
 
+pub mod bulk;
 mod colour;
 mod group;
 mod host;
@@ -13,6 +14,7 @@ pub mod search;
 mod settings;
 mod tag;
 
+pub use bulk::{BulkEdit, Change};
 pub use colour::Colour;
 pub use group::{Group, GroupError, GroupRow, GroupTree};
 pub use host::{Host, HostError};
