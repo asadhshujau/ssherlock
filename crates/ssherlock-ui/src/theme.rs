@@ -200,6 +200,12 @@ pub struct Metrics {
     pub menu_width: Pixels,
     /// Diameter of a status dot (connection state).
     pub status_dot: Pixels,
+    /// Width of the label column in a form.
+    pub form_label_width: Pixels,
+    /// Smallest height of a multi-line text field.
+    pub multiline_min_height: Pixels,
+    /// Tallest a picker's list grows before it scrolls.
+    pub picker_max_height: Pixels,
 }
 
 impl Theme {
@@ -392,6 +398,9 @@ impl Default for Metrics {
             modal_width: px(480.),
             menu_width: px(220.),
             status_dot: px(8.),
+            form_label_width: px(140.),
+            multiline_min_height: px(72.),
+            picker_max_height: px(320.),
         }
     }
 }

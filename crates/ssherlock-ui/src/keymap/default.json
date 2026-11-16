@@ -65,6 +65,51 @@
     }
   },
   {
+    "context": "TextInput",
+    "bindings": {
+      "secondary-v": "text_input::Paste",
+      "shift-insert": "text_input::Paste",
+      "secondary-c": "text_input::Copy",
+      "secondary-x": "text_input::Cut",
+      "secondary-a": "text_input::SelectAll"
+    }
+  },
+  {
+    "context": "TextInput && multiline",
+    "bindings": {
+      "enter": "text_input::Newline"
+    }
+  },
+  {
+    "context": "Form",
+    "bindings": {
+      "tab": "form::FocusNext",
+      "shift-tab": "form::FocusPrevious"
+    }
+  },
+  {
+    "context": "Checkbox",
+    "bindings": {
+      "space": "form::Toggle"
+    }
+  },
+  {
+    "context": "SegmentedControl",
+    "bindings": {
+      "right": "menu::SelectNext",
+      "left": "menu::SelectPrevious"
+    }
+  },
+  {
+    "context": "Picker",
+    "bindings": {
+      "down": "menu::SelectNext",
+      "up": "menu::SelectPrevious",
+      "enter": "menu::ConfirmItem",
+      "escape": "menu::Dismiss"
+    }
+  },
+  {
     "context": "TerminalSearch",
     "bindings": {
       "enter": "terminal::SearchOlder",
