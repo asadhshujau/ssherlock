@@ -36,6 +36,7 @@ use crate::components::form::{FocusNext, FocusPrevious};
 use crate::components::{
     Button, ButtonStyle, Picker, PickerEvent, PickerItem, TextInput, TextInputEvent,
 };
+use crate::keychain::KeyList;
 use crate::ssh::SshEnvironment;
 use crate::theme::{ActiveTheme as _, Theme};
 
@@ -65,6 +66,8 @@ pub struct HostList {
     /// A picker open over the page (sort order, or a group to move hosts to).
     picker: Option<(Entity<Picker>, Subscription)>,
     editor: Option<(Entity<HostEditor>, Subscription)>,
+    /// The keys page, shown in place of the hosts when "Keys" is chosen.
+    keys: Entity<KeyList>,
     /// A host just saved, to put the cursor on once it shows up.
     pending_cursor: Option<Id<Host>>,
     nav_focus: FocusHandle,
@@ -82,6 +85,7 @@ impl Focusable for HostList {
         }
         match &self.picker {
             Some((picker, _)) => picker.focus_handle(cx),
+            None if self.section == Section::Keys => self.keys.focus_handle(cx),
             None => self.list_focus.clone(),
         }
     }
@@ -91,7 +95,10 @@ impl HostList {
     /// The page over `model`.
     pub fn new(model: Entity<HostsModel>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::field("", cx).placeholder("Search hosts"));
+        let keys = cx.new(|cx| KeyList::new(model.clone(), cx));
         let subscriptions = vec![
+            // The keys page's dialogs are drawn over the whole page, so it redraws with them.
+            cx.observe(&keys, |_, _, cx| cx.notify()),
             cx.observe(&model, |list, _, cx| list.refresh(cx)),
             cx.subscribe(&search, |list, _, event: &TextInputEvent, cx| {
                 if let TextInputEvent::Changed(_) = event {
@@ -111,6 +118,7 @@ impl HostList {
             trash_cursor: 0,
             picker: None,
             editor: None,
+            keys,
             pending_cursor: None,
             nav_focus: cx.focus_handle().tab_stop(true),
             list_focus: cx.focus_handle().tab_stop(true),
@@ -146,7 +154,7 @@ impl HostList {
         let still_there = match &self.section {
             Section::Hosts(Scope::Group(id)) => tree.get(*id).is_some(),
             Section::Tag(tag) => model.hosts().iter().any(|h| h.tags.contains(tag)),
-            Section::Hosts(_) | Section::Trash => true,
+            Section::Hosts(_) | Section::Keys | Section::Trash => true,
         };
         if !still_there {
             self.section = Section::all();
@@ -162,9 +170,9 @@ impl HostList {
                 tag: Some(tag.clone()),
                 scope: Scope::All,
             },
-            Section::Trash => HostQuery::default(),
+            Section::Keys | Section::Trash => HostQuery::default(),
         };
-        self.visible = if self.section == Section::Trash {
+        self.visible = if matches!(self.section, Section::Keys | Section::Trash) {
             Vec::new()
         } else {
             search::filter(model.hosts(), &query, &tree, self.sort)
@@ -198,7 +206,11 @@ impl HostList {
 
     fn nav_items(&self, cx: &App) -> Vec<NavItem> {
         let model = self.model.read(cx);
-        nav::items(model.hosts(), model.groups(), model.trash().len(), |id| {
+        let counts = nav::Counts {
+            keys: model.keys().len(),
+            trash: model.trash().len(),
+        };
+        nav::items(model.hosts(), model.groups(), counts, |id| {
             self.expanded.contains(&id)
         })
     }
@@ -464,6 +476,10 @@ impl HostList {
     }
 
     fn focus_list(&mut self, _: &FocusList, window: &mut Window, cx: &mut Context<Self>) {
+        if self.section == Section::Keys {
+            self.keys.focus_handle(cx).focus(window);
+            return;
+        }
         self.list_focus.focus(window);
         if self.selection.cursor().is_none() {
             let ids = self.visible_ids();
@@ -716,6 +732,7 @@ impl Render for HostList {
             .when_some(self.editor.as_ref(), |d, (editor, _)| {
                 d.child(editor.clone())
             })
+            .children(self.keys.read(cx).overlay())
     }
 }
 
@@ -919,6 +936,7 @@ impl HostList {
             Section::Hosts(Scope::Recent) => "Recent".to_owned(),
             Section::Hosts(Scope::Group(id)) => tree.path(*id),
             Section::Tag(tag) => format!("#{tag}"),
+            Section::Keys => "Keys".to_owned(),
             Section::Trash => "Trash".to_owned(),
         };
         let count = if is_trash {
@@ -1161,25 +1179,25 @@ impl HostList {
                 )
             });
 
-        div()
-            .flex()
-            .size_full()
-            .child(nav)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(theme.spacing.lg)
-                    .p(theme.spacing.xl)
-                    // Search, sort and layout don't apply to the trash.
-                    .when(!is_trash, |d| d.child(toolbar))
-                    .children(recent_strip)
-                    .child(heading)
-                    .child(list),
-            )
-            .children(detail)
+        let page = div().flex().size_full().child(nav);
+        if self.section == Section::Keys {
+            return page.child(self.keys.clone());
+        }
+        page.child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(theme.spacing.lg)
+                .p(theme.spacing.xl)
+                // Search, sort and layout don't apply to the trash.
+                .when(!is_trash, |d| d.child(toolbar))
+                .children(recent_strip)
+                .child(heading)
+                .child(list),
+        )
+        .children(detail)
     }
 }
 
@@ -1284,6 +1302,48 @@ mod tests {
                 .find(|h| h.id == cursor)
                 .map(|h| h.title().into_owned())
         })
+    }
+
+    #[gpui::test]
+    fn the_keys_page_generates_and_deletes_from_the_keyboard(cx: &mut TestAppContext) {
+        let (f, cx) = page(&[], &[], cx);
+        // Walk the navigation column down to "Keys" and step into it.
+        f.list.update_in(cx, |list, window, cx| {
+            list.nav_focus.focus(window);
+            cx.notify();
+        });
+        cx.simulate_keystrokes("end up");
+        assert_eq!(
+            f.list.read_with(cx, |l, _| l.section.clone()),
+            Section::Keys
+        );
+        cx.simulate_keystrokes("enter n");
+        cx.run_until_parked();
+        let keys = f.list.read_with(cx, |l, _| l.keys.clone());
+        assert!(
+            keys.read_with(cx, |k, _| k.editor().is_some()),
+            "n opens the key form"
+        );
+        cx.simulate_input("Deploy");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let saved = f.model.read_with(cx, |m, _| m.keys().to_vec());
+        assert_eq!(saved.len(), 1);
+        let id = saved.first().unwrap().id;
+        assert_eq!(keys.read_with(cx, |k, _| k.cursor()), Some(id));
+        assert!(keys.read_with(cx, |k, _| k.editor().is_none()));
+
+        // Delete asks first; the dialog is a danger one, so Enter alone doesn't confirm.
+        cx.simulate_keystrokes("delete enter");
+        cx.run_until_parked();
+        assert_eq!(f.model.read_with(cx, |m, _| m.keys().len()), 1);
+        cx.simulate_keystrokes("escape delete");
+        let modal = keys.read_with(cx, |k, _| k.delete_dialog()).unwrap();
+        modal.update(cx, |_, cx| {
+            cx.emit(crate::components::ModalEvent::Confirmed);
+        });
+        cx.run_until_parked();
+        assert_eq!(f.model.read_with(cx, |m, _| m.keys().len()), 0);
     }
 
     #[gpui::test]

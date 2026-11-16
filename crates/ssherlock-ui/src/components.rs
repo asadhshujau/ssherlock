@@ -8,6 +8,7 @@ pub mod form;
 pub mod modal;
 pub mod picker;
 pub mod segmented;
+pub mod sheet;
 pub mod tab_bar;
 pub mod text_input;
 
@@ -18,5 +19,6 @@ pub use form::{Form, FormField, FormSection};
 pub use modal::{Modal, ModalEvent};
 pub use picker::{Picker, PickerEvent, PickerItem};
 pub use segmented::{Segment, SegmentedControl};
+pub use sheet::sheet;
 pub use tab_bar::{Tab, TabBar};
 pub use text_input::{InputKind, TextInput, TextInputEvent};

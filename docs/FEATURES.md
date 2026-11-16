@@ -104,22 +104,22 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 ## 4. Keychain (KEY)
 
-- [ ] **KEY-01** Store SSH private keys (encrypted at rest) (Free)
+- [x] **KEY-01** Store SSH private keys (encrypted at rest) (Free)
 - [ ] **KEY-02** Store passwords (Free)
 - [~] **KEY-03** Identities: username + key/password reusable across hosts, change once → applies everywhere (Free)
   _Left: logging in with an identity's key and password, and editing identities in the keychain view (rest of Phase 4). A host's user name already comes from its identity._
-- [ ] **KEY-04** Generate keys: Ed25519, ECDSA P-256/384/521, RSA 2048–4096, with passphrase (Free)
-- [ ] **KEY-05** Import keys from file, clipboard, `~/.ssh` scan (Free)
-- [ ] **KEY-06** Export keys: OpenSSH, PEM/PKCS#8, public key only (Free)
+- [x] **KEY-04** Generate keys: Ed25519, ECDSA P-256/384/521, RSA 2048–4096, with passphrase (Free)
+- [x] **KEY-05** Import keys from file, clipboard, `~/.ssh` scan (Free)
+- [x] **KEY-06** Export keys: OpenSSH, PEM/PKCS#8, public key only (Free)
 - [ ] **KEY-07** Export public key to host (`ssh-copy-id` equivalent) (Free)
 - [ ] **KEY-08** OpenSSH certificates stored alongside keys (Pro)
 - [ ] **KEY-09** FIDO2 key enrolment and use (Pro)
 - [ ] **KEY-10** Built-in SSH agent (serve keys to other apps) (Pro)
 - [x] **KEY-11** Passphrase caching with timeout (Free)
 - [ ] **KEY-12** Biometric unlock (Touch ID / Windows Hello) and OS keychain integration (Pro)
-- [ ] **KEY-13** Show fingerprint (SHA-256, MD5) and randomart (Free)
+- [x] **KEY-13** Show fingerprint (SHA-256, MD5) and randomart (Free)
 - [~] **KEY-14** Which hosts use this key / identity (Free)
-  _Left: showing it in the keychain view (rest of Phase 4). The model works it out, inheritance included._
+  _Left: identities' usage, with the identities view (rest of Phase 4). Keys show theirs._
 - [ ] **KEY-15** Key rotation helper: generate new, push to all hosts using old, retire old (+)
 
 ## 5. Port forwarding (FWD)
@@ -164,8 +164,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 ## 8. Sync, vaults & security (SEC)
 
-- [~] **SEC-01** Local encrypted storage at rest: master key in OS keychain, data encrypted with ChaCha20-Poly1305 (Free)
-  _Left: saving keys and passwords from the keychain page and host editor (rest of Phase 4). The vault unlocks when the app starts, and logins open saved secrets with it._
+- [x] **SEC-01** Local encrypted storage at rest: master key in OS keychain, data encrypted with ChaCha20-Poly1305 (Free)
 - [ ] **SEC-02** Optional master password with Argon2id; auto-lock after idle (Pro)
 - [ ] **SEC-03** Biometric unlock (Pro)
 - [ ] **SEC-04** End-to-end encrypted sync across devices, zero-knowledge server (Pro)
