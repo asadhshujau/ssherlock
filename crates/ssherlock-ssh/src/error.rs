@@ -36,6 +36,40 @@ pub enum SshError {
         source: russh::keys::ssh_key::Error,
     },
 
+    /// Generating a key failed.
+    #[error("could not generate the {kind} key")]
+    KeyGenerate {
+        /// The kind of key, e.g. `RSA 4096`.
+        kind: String,
+        /// Why.
+        #[source]
+        source: russh::keys::ssh_key::Error,
+    },
+    /// A key's algorithm or size isn't one the keychain holds.
+    #[error("{algorithm} keys are not supported")]
+    KeyUnsupported {
+        /// The algorithm.
+        algorithm: String,
+    },
+    /// Text that should be a private key isn't one SSHerlock can read.
+    #[error("could not read the private key: {reason}")]
+    KeyUnreadable {
+        /// What the parser objected to.
+        reason: String,
+    },
+    /// The private key is encrypted and no passphrase was given.
+    #[error("the private key is encrypted; its passphrase is needed")]
+    KeyNeedsPassphrase,
+    /// The passphrase given doesn't decrypt the private key.
+    #[error("the passphrase for the private key is wrong")]
+    KeyWrongPassphrase,
+    /// A key couldn't be written out in the format asked for.
+    #[error("could not export the key: {reason}")]
+    KeyExport {
+        /// Why.
+        reason: String,
+    },
+
     /// The operating system's random number generator failed.
     #[error("could not get random bytes from the operating system")]
     Random(#[from] rand::rngs::SysError),
