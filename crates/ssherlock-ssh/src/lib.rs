@@ -5,6 +5,7 @@
 
 pub mod algorithms;
 pub mod auth;
+pub mod authorized_keys;
 pub mod connection;
 mod error;
 pub mod host_keys;
@@ -15,6 +16,7 @@ mod shell;
 
 pub use algorithms::{AlgorithmPreferences, Compression};
 pub use auth::{AgentSocket, AuthMethod, PassphraseCache, StoredKey};
+pub use authorized_keys::KeyInstall;
 pub use connection::{ConnectionState, RemoteShellConfig, spawn_shell};
 pub use error::SshError;
 pub use host_keys::HostKeys;

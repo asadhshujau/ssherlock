@@ -91,7 +91,7 @@ impl Session {
 }
 
 /// Waits for the reply to a `want_reply` request, keeping any output that arrives first.
-async fn expect_success(
+pub(crate) async fn expect_success(
     channel: &mut Channel<Msg>,
     request: &'static str,
 ) -> Result<Vec<Vec<u8>>, SshError> {
