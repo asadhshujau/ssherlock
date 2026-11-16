@@ -16,7 +16,7 @@ use gpui::{
 };
 use ssherlock_core::hosts::search::{self, HostQuery, Scope, SortOrder};
 use ssherlock_core::hosts::{BulkEdit, Change, Group, GroupTree, Host, resolve};
-use ssherlock_core::{ConnectTarget, Id, Port, Timestamp, time};
+use ssherlock_core::{ConnectTarget, Id, Timestamp, time};
 
 use super::actions::{
     ChangeSort, ClearSearch, ClearSelection, CollapseGroup, ConnectSelected, DeleteForever,
@@ -25,6 +25,7 @@ use super::actions::{
     SelectAll, SelectFirst, SelectLast, SelectNext, SelectPrevious, ToggleFavourite, ToggleLayout,
     ToggleSelected, TrashGroup, TrashSelected,
 };
+use super::connect::{ConnectRequest, target_text};
 use super::detail::{CaseFile, case_file};
 use super::editor::{EditorMode, HostEditor, HostEditorEvent, Saved};
 use super::item::{HostItem, HostSummary, Layout, mark};
@@ -46,15 +47,6 @@ const RECENT_STRIP: usize = 5;
 pub enum HostListEvent {
     /// Open a tab connected to each of these, in order.
     Connect(Vec<ConnectRequest>),
-}
-
-/// One host to connect to, resolved.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectRequest {
-    /// The saved host.
-    pub host: Id<Host>,
-    /// Where and as whom.
-    pub target: ConnectTarget,
 }
 
 /// The hosts page.
@@ -405,21 +397,10 @@ impl HostList {
     /// Asks the owner to connect to `ids`, resolved against their groups.
     fn connect(&mut self, ids: &[Id<Host>], cx: &mut Context<Self>) {
         let model = self.model.read(cx);
-        let tree = GroupTree::new(model.groups());
         let requests: Vec<ConnectRequest> = ids
             .iter()
             .filter_map(|&id| model.host(id))
-            .map(|host| {
-                let effective = resolve(host, &tree.ancestors(host.group));
-                ConnectRequest {
-                    host: host.id,
-                    target: ConnectTarget {
-                        user: effective.settings.username.value,
-                        address: effective.address,
-                        port: Some(effective.settings.port.value),
-                    },
-                }
-            })
+            .map(|host| ConnectRequest::new(host, model.groups()))
             .collect();
         if !requests.is_empty() {
             cx.emit(HostListEvent::Connect(requests));
@@ -687,18 +668,6 @@ impl HostList {
         }
         cx.notify();
     }
-}
-
-/// `user@address[:port]` for a resolved host, leaving out the default port. Without a saved
-/// user, the local user name the connection will use.
-fn target_text(target: &ConnectTarget, local_user: Option<&str>) -> String {
-    let user = target.user.as_deref().or(local_user);
-    let display = ConnectTarget {
-        user: user.map(str::to_owned),
-        address: target.address.clone(),
-        port: target.port.filter(|p| *p != Port::SSH),
-    };
-    display.to_string()
 }
 
 impl Render for HostList {
@@ -1137,7 +1106,8 @@ impl HostList {
                     .group
                     .filter(|g| tree.get(*g).is_some())
                     .map(|g| tree.path(g));
-                let file = CaseFile::new(host, summarise(host), group);
+                let file =
+                    CaseFile::new(host, summarise(host), group, model.open_sessions(host.id));
                 let id = host.id;
                 case_file(
                     file,
@@ -1195,6 +1165,7 @@ mod tests {
 
     use gpui::{TestAppContext, VisualTestContext};
     use pretty_assertions::assert_eq;
+    use ssherlock_core::Port;
     use ssherlock_core::hosts::Tag;
     use ssherlock_store::{Repository as _, Store};
 
@@ -1477,20 +1448,5 @@ mod tests {
         assert_eq!(bulk.as_deref(), Some("Edit 3 hosts"));
         cx.simulate_keystrokes("escape");
         assert!(f.list.read_with(cx, |l, _| l.editor.is_none()));
-    }
-
-    #[test]
-    fn target_text_leaves_out_the_default_port() {
-        let target = |user: Option<&str>, port: u16| ConnectTarget {
-            user: user.map(str::to_owned),
-            address: "example.com".parse().unwrap(),
-            port: Port::new(port),
-        };
-        assert_eq!(target_text(&target(Some("a"), 22), None), "a@example.com");
-        assert_eq!(
-            target_text(&target(None, 2222), Some("me")),
-            "me@example.com:2222"
-        );
-        assert_eq!(target_text(&target(None, 22), None), "example.com");
     }
 }

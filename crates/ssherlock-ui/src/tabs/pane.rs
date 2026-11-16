@@ -6,16 +6,17 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
 };
-use ssherlock_core::ConnectTarget;
+use ssherlock_core::hosts::{Colour, Host};
+use ssherlock_core::{ConnectTarget, Id};
 
 use super::actions::{
-    CloseTab, MoveTabLeft, MoveTabRight, NewTab, NextTab, PreviousTab, RenameTab, ShowHosts,
+    CloseTab, MoveTabLeft, MoveTabRight, NewTab, NextTab, PinTab, PreviousTab, RenameTab, ShowHosts,
 };
 use super::list::{Step, TabList};
 use crate::components::{InputKind, Tab, TabBar, TextInput, TextInputEvent};
-use crate::hosts::{HostList, HostListEvent, HostsModel};
+use crate::hosts::{ConnectRequest, HostList, HostListEvent, HostsModel};
 use crate::ssh::actions::QuickConnect;
-use crate::ssh::{QuickConnectBar, QuickConnectEvent, RemoteTerminal};
+use crate::ssh::{ConnectOptions, QuickConnectBar, QuickConnectEvent, RemoteTerminal};
 use crate::terminal::{TerminalView, TerminalViewEvent};
 use crate::theme::ActiveTheme as _;
 
@@ -71,6 +72,10 @@ struct PaneTab {
     name: Option<SharedString>,
     /// The bell rang while the tab was in the background.
     has_bell: bool,
+    /// The saved host it's connected to, if it was opened from one.
+    host: Option<Id<Host>>,
+    /// The host's colour, marked on the tab (TERM-05).
+    colour: Option<Colour>,
     _subscription: Subscription,
 }
 
@@ -195,10 +200,24 @@ impl Pane {
     ) {
         let HostListEvent::Connect(requests) = event;
         for request in requests {
-            self.open_remote_tab(&request.target, window, cx);
-            if let Some(model) = HostsModel::global(cx) {
-                model.update(cx, |model, cx| model.record_connection(request.host, cx));
-            }
+            self.open_saved_host(request, window, cx);
+        }
+    }
+
+    /// Opens a tab connected to a saved host, marked with its colour, and notes the connection
+    /// for Recents and the host's open sessions.
+    pub fn open_saved_host(
+        &mut self,
+        request: &ConnectRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_remote(&request.target, &request.options, Some(request), window, cx);
+        if let Some(model) = HostsModel::global(cx) {
+            model.update(cx, |model, cx| {
+                model.record_connection(request.host, cx);
+                model.session_opened(request.host, cx);
+            });
         }
     }
 
@@ -217,27 +236,39 @@ impl Pane {
         let subscription = cx.subscribe_in(&view, window, |pane, view, event, window, cx| {
             pane.terminal_event(view.entity_id(), event, window, cx);
         });
-        self.add_tab(TabView::Local(view), subscription, window, cx);
+        self.add_tab(TabView::Local(view), subscription, None, window, cx);
     }
 
-    /// Opens a tab connected to `target` over SSH, after the active one.
+    /// Opens a tab connected to `target` over SSH with default options, after the active one.
     pub fn open_remote_tab(
         &mut self,
         target: &ConnectTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let view = cx.new(|cx| RemoteTerminal::new(target, window, cx));
+        self.open_remote(target, &ConnectOptions::default(), None, window, cx);
+    }
+
+    fn open_remote(
+        &mut self,
+        target: &ConnectTarget,
+        options: &ConnectOptions,
+        saved: Option<&ConnectRequest>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| RemoteTerminal::new(target, options, window, cx));
         let subscription = cx.subscribe_in(&view, window, |pane, view, event, window, cx| {
             pane.terminal_event(view.entity_id(), event, window, cx);
         });
-        self.add_tab(TabView::Remote(view), subscription, window, cx);
+        self.add_tab(TabView::Remote(view), subscription, saved, window, cx);
     }
 
     fn add_tab(
         &mut self,
         view: TabView,
         subscription: Subscription,
+        saved: Option<&ConnectRequest>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -245,6 +276,8 @@ impl Pane {
             view,
             name: None,
             has_bell: false,
+            host: saved.map(|request| request.host),
+            colour: saved.and_then(|request| request.colour),
             _subscription: subscription,
         });
         self.is_showing_hosts = false;
@@ -257,6 +290,9 @@ impl Pane {
             pane.quick_connect = None;
             match event {
                 QuickConnectEvent::Connect(target) => pane.open_remote_tab(target, window, cx),
+                QuickConnectEvent::ConnectSaved(request) => {
+                    pane.open_saved_host(request, window, cx);
+                }
                 QuickConnectEvent::Dismissed => pane.focus_active(window, cx),
             }
         });
@@ -311,6 +347,11 @@ impl Pane {
         {
             self.rename = None;
         }
+        if let Some(host) = tab.host
+            && let Some(model) = HostsModel::global(cx)
+        {
+            model.update(cx, |model, cx| model.session_closed(host, cx));
+        }
         // Dropping the tab drops its view, which stops the terminal and hangs up the shell.
         drop(tab);
         self.focus_active(window, cx);
@@ -338,10 +379,32 @@ impl Pane {
         self.open_tab(window, cx);
     }
 
+    /// Closes the active tab, unless it's pinned (or the hosts page is in front).
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(index) = self.tabs.active_index() {
+        if self.visible_hosts().is_some() {
+            return;
+        }
+        if let Some(index) = self.tabs.active_index()
+            && !self.tabs.is_pinned(index)
+        {
             self.close_tab_at(index, window, cx);
         }
+    }
+
+    fn pin_tab(&mut self, _: &PinTab, _: &mut Window, cx: &mut Context<Self>) {
+        if self.visible_hosts().is_none()
+            && let Some(index) = self.tabs.active_index()
+        {
+            self.tabs.toggle_pin(index);
+            cx.notify();
+        }
+    }
+
+    /// Whether the active tab is pinned.
+    pub fn is_active_pinned(&self) -> bool {
+        self.tabs
+            .active_index()
+            .is_some_and(|index| self.tabs.is_pinned(index))
     }
 
     fn next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
@@ -458,6 +521,8 @@ impl Pane {
             Tab::new(("tab", id.as_u64()), label)
                 .active(!hosts_in_front && self.tabs.active_index() == Some(index))
                 .indicator(tab.has_bell)
+                .pinned(self.tabs.is_pinned(index))
+                .mark(tab.colour.map(|colour| cx.theme().colors.marks.get(colour)))
                 .on_click(
                     cx.listener(move |pane, event: &gpui::ClickEvent, window, cx| {
                         if event.click_count() == 2 {
@@ -467,17 +532,19 @@ impl Pane {
                         }
                     }),
                 )
-                .on_close({
-                    let pane = cx.weak_entity();
-                    move |window, cx| {
-                        let closed =
-                            pane.update(cx, |pane, cx| pane.close_tab_at(index, window, cx));
-                        if closed.is_err() {
-                            tracing::debug!(
-                                "pane closed before its tab's close button was handled"
-                            );
+                .when(!self.tabs.is_pinned(index), |tab| {
+                    tab.on_close({
+                        let pane = cx.weak_entity();
+                        move |window, cx| {
+                            let closed =
+                                pane.update(cx, |pane, cx| pane.close_tab_at(index, window, cx));
+                            if closed.is_err() {
+                                tracing::debug!(
+                                    "pane closed before its tab's close button was handled"
+                                );
+                            }
                         }
-                    }
+                    })
                 })
                 .on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
                 .drag_over::<DraggedTab>(move |style, _, _, cx| {
@@ -534,6 +601,7 @@ impl Render for Pane {
             .on_action(cx.listener(Self::rename_tab))
             .on_action(cx.listener(Self::quick_connect))
             .on_action(cx.listener(Self::show_hosts))
+            .on_action(cx.listener(Self::pin_tab))
             .relative()
             .flex()
             .flex_col()
@@ -865,6 +933,7 @@ mod tests {
         host.label = "local test".into();
         host.settings.port = ssherlock_core::Port::new(9);
         host.settings.username = Some("saved-user".into());
+        host.settings.colour = Some(ssherlock_core::hosts::Colour::Teal);
         let id = host.id;
         let (pane, model, cx) = pane_with_hosts(&[host], cx);
 
@@ -885,6 +954,49 @@ mod tests {
             last_connected.is_some(),
             "the connection is recorded for Recents"
         );
+        let colour = pane.read_with(cx, |pane, _| pane.tabs.active().and_then(|tab| tab.colour));
+        assert_eq!(
+            colour,
+            Some(ssherlock_core::hosts::Colour::Teal),
+            "the tab carries the host's colour"
+        );
+        assert_eq!(model.read_with(cx, |m, _| m.open_sessions(id)), 1);
+        cx.dispatch_action(CloseTab);
+        assert_eq!(
+            model.read_with(cx, |m, _| m.open_sessions(id)),
+            0,
+            "closing the tab ends the session"
+        );
         drop(runtime);
+    }
+
+    #[gpui::test]
+    fn a_pinned_tab_stays_open_until_unpinned(cx: &mut TestAppContext) {
+        let (pane, cx) = pane(cx);
+        cx.dispatch_action(NewTab);
+        cx.dispatch_action(PinTab);
+        let state = |cx: &mut VisualTestContext| {
+            pane.read_with(cx, |pane, _| {
+                (
+                    pane.tab_count(),
+                    pane.active_index(),
+                    pane.is_active_pinned(),
+                )
+            })
+        };
+        assert_eq!(
+            state(cx),
+            (2, Some(0), true),
+            "pinning moves the tab to the front"
+        );
+        cx.dispatch_action(CloseTab);
+        assert_eq!(
+            state(cx),
+            (2, Some(0), true),
+            "Close does nothing to a pinned tab"
+        );
+        cx.dispatch_action(PinTab);
+        cx.dispatch_action(CloseTab);
+        assert_eq!(state(cx).0, 1, "once unpinned it closes");
     }
 }
