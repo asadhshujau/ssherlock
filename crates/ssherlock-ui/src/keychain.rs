@@ -17,7 +17,7 @@ pub use editor::{KeyEditor, KeyEditorEvent, KeyEditorMode};
 use gpui::App;
 pub use identities::IdentityList;
 pub use identity_editor::{IdentityEditor, IdentityEditorEvent};
-pub use list::KeyList;
+pub use list::{KeyList, KeyListEvent};
 
 /// Sets up the keychain feature. Its actions are handled by its views and bound in
 /// `keymap/default.json`.

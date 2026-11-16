@@ -15,6 +15,8 @@ actions!(
         ImportFromSshDir,
         /// Saves the key under the cursor to a file, in a format to choose.
         ExportKey,
+        /// Connects to a saved host and adds the key under the cursor to its `authorized_keys`.
+        ExportKeyToHost,
         /// Copies the public key under the cursor to the clipboard.
         CopyPublicKey,
         /// Edits the key under the cursor: its name and whether its passphrase is saved.

@@ -10,17 +10,19 @@ use std::path::PathBuf;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
 };
+use ssherlock_core::hosts::Host;
 use ssherlock_core::keychain::{Key, KeyProtection, Usage, usage_of_key};
 use ssherlock_core::{ExposeSecret as _, Id, SecretString, Timestamp};
 use ssherlock_ssh::keys::{self, ExportFormat, FoundKey};
 use zeroize::Zeroizing;
 
 use super::actions::{
-    CopyPublicKey, DeleteKey, EditKey, ExportKey, GenerateKey, ImportFromSshDir, ImportKey,
+    CopyPublicKey, DeleteKey, EditKey, ExportKey, ExportKeyToHost, GenerateKey, ImportFromSshDir,
+    ImportKey,
 };
 use super::detail::{KeyButtons, KeyFacts, key_panel};
 use super::editor::{KeyEditor, KeyEditorEvent, KeyEditorMode, copy_text};
@@ -121,6 +123,19 @@ pub fn sorted(keys: &[Key]) -> Vec<&Key> {
 enum Choosing {
     Export(Id<Key>),
     Found(Vec<FoundKey>),
+    Host(Id<Key>, Vec<Id<Host>>),
+}
+
+/// What the keys page asks its owner to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyListEvent {
+    /// Connect to `host` and add `key` to its `authorized_keys` (KEY-07).
+    ExportToHost {
+        /// The key to add.
+        key: Id<Key>,
+        /// The saved host to add it to.
+        host: Id<Host>,
+    },
 }
 
 /// A dialog open over the page.
@@ -146,6 +161,8 @@ pub struct KeyList {
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
+
+impl EventEmitter<KeyListEvent> for KeyList {}
 
 impl Focusable for KeyList {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -419,10 +436,47 @@ impl KeyList {
                     self.export_as(id, *choice, None, window, cx);
                 }
             }
+            Choosing::Host(key, hosts) => {
+                if let Some(host) = hosts.get(*index) {
+                    cx.emit(KeyListEvent::ExportToHost { key, host: *host });
+                }
+            }
         }
     }
 
     // ── exporting ──────────────────────────────────────────────────────────────────────
+
+    fn export_to_host(&mut self, _: &ExportKeyToHost, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.cursor_key(cx) else {
+            return;
+        };
+        let model = self.model.read(cx);
+        let mut hosts: Vec<&Host> = model.hosts().iter().collect();
+        hosts.sort_by_key(|h| h.title().to_lowercase());
+        if hosts.is_empty() {
+            notify::info("There are no saved hosts to add the key to", cx);
+            return;
+        }
+        let items = hosts
+            .iter()
+            .map(|h| PickerItem::new(h.title().into_owned()).detail(h.address.to_string()))
+            .collect();
+        let ids = hosts.iter().map(|h| h.id).collect();
+        let picker = cx.new(|cx| {
+            Picker::new(
+                format!("Add {} to a host's authorized_keys", key.title()),
+                items,
+                window,
+                cx,
+            )
+        });
+        let subscription = cx.subscribe_in(&picker, window, Self::picker_event);
+        self.dialog = Some((
+            Dialog::Picker(picker, Choosing::Host(key.id, ids)),
+            vec![subscription],
+        ));
+        cx.notify();
+    }
 
     fn copy_public_key(&mut self, _: &CopyPublicKey, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(key) = self.cursor_key(cx) {
@@ -817,6 +871,7 @@ impl Render for KeyList {
             .on_action(cx.listener(Self::import_from_ssh_dir))
             .on_action(cx.listener(Self::export))
             .on_action(cx.listener(Self::copy_public_key))
+            .on_action(cx.listener(Self::export_to_host))
             .on_action(cx.listener(Self::edit))
             .on_action(cx.listener(Self::delete))
             .flex()
@@ -870,6 +925,9 @@ impl Render for KeyList {
                     }),
                     on_export: cx.listener(|list, _, window, cx| {
                         list.export(&ExportKey, window, cx);
+                    }),
+                    on_export_to_host: cx.listener(|list, _, window, cx| {
+                        list.export_to_host(&ExportKeyToHost, window, cx);
                     }),
                     on_edit: cx.listener(|list, _, window, cx| list.edit(&EditKey, window, cx)),
                     on_delete: cx.listener(|list, _, window, cx| {

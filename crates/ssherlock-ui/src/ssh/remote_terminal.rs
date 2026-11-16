@@ -7,20 +7,27 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window,
-    div,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Subscription, Task, Window, div,
 };
+use ssherlock_core::keychain::Key;
 use ssherlock_core::{ConnectTarget, SecretString};
 use ssherlock_ssh::auth::{AuthMethod, AuthPrompt, default_key_files};
 use ssherlock_ssh::known_hosts::{HostHashing, randomart};
 use ssherlock_ssh::session::{ConnectConfig, DEFAULT_PORT, HostKeyDecision, HostKeyPrompt};
-use ssherlock_ssh::{ConnectionState, HostKeys, RemoteShellConfig, SessionEvent, spawn_shell};
+use ssherlock_ssh::{
+    ConnectionState, HostKeys, KeyInstall, RemoteShellConfig, SessionEvent, ShellHandle,
+    spawn_shell,
+};
 use ssherlock_terminal::{PtyExit, PtyIo, PtyOutput, TerminalSize};
 use tokio::sync::mpsc;
 
+use super::actions::ExportKeyHere;
 use super::dialogs::{KeyRow, host_key_text, login_text};
 use super::{ConnectOptions, OpenedCredentials, Passphrases, SshEnvironment, status};
-use crate::components::{InputKind, Modal, ModalEvent, TextInput, TextInputEvent};
+use crate::components::{
+    InputKind, Modal, ModalEvent, Picker, PickerEvent, PickerItem, TextInput, TextInputEvent,
+};
 use crate::hosts::HostsModel;
 use crate::notify;
 use crate::runtime::TokioHandle;
@@ -73,6 +80,11 @@ enum Dialog {
         inputs: Vec<(Entity<TextInput>, bool)>,
         _subscriptions: Vec<Subscription>,
     },
+    /// Choosing a key to add to the server's `authorized_keys`.
+    ChooseKey {
+        picker: Entity<Picker>,
+        _subscription: Subscription,
+    },
 }
 
 impl Dialog {
@@ -83,6 +95,7 @@ impl Dialog {
                 || modal.focus_handle(cx),
                 |(input, _)| input.focus_handle(cx),
             ),
+            Self::ChooseKey { picker, .. } => picker.focus_handle(cx),
         }
     }
 
@@ -91,6 +104,7 @@ impl Dialog {
             Self::HostKey { modal, .. } | Self::Login { modal, .. } => {
                 modal.clone().into_any_element()
             }
+            Self::ChooseKey { picker, .. } => picker.clone().into_any_element(),
         }
     }
 }
@@ -102,6 +116,8 @@ pub struct RemoteTerminal {
     terminal: Entity<TerminalView>,
     state: Option<ConnectionState>,
     dialog: Option<Dialog>,
+    /// Asks the connection for work beside the shell; `None` if it never started.
+    shell: Option<ShellHandle>,
     _subscriptions: Vec<Subscription>,
     _events: Option<Task<()>>,
 }
@@ -139,7 +155,7 @@ impl RemoteTerminal {
         };
         let size = TerminalSize::default();
 
-        let (pty, events, failure) = match (env, tokio, user) {
+        let (pty, shell, events, failure) = match (env, tokio, user) {
             (Some(env), Some(tokio), Some(user)) => {
                 let connect = ConnectConfig::new(target.address.to_string(), user)
                     .with_port(port)
@@ -162,24 +178,24 @@ impl RemoteTerminal {
                     HostHashing::Hashed,
                 );
                 let (tx, rx) = mpsc::channel(EVENT_CAPACITY);
-                (
-                    spawn_shell(config, host_keys, size, tx, &tokio),
-                    Some(rx),
-                    None,
-                )
+                let (pty, shell) = spawn_shell(config, host_keys, size, tx, &tokio);
+                (pty, Some(shell), Some(rx), None)
             }
             (None, _, _) => (
                 finished_pty(),
+                None,
                 None,
                 Some("SSH is not set up: there is no data directory"),
             ),
             (_, None, _) => (
                 finished_pty(),
                 None,
+                None,
                 Some("the app's async runtime isn't running"),
             ),
             (_, _, None) => (
                 finished_pty(),
+                None,
                 None,
                 Some("no user name: connect as user@host"),
             ),
@@ -216,6 +232,7 @@ impl RemoteTerminal {
             terminal,
             state,
             dialog: None,
+            shell,
             _subscriptions: vec![forward],
             _events: events,
         }
@@ -377,12 +394,85 @@ impl RemoteTerminal {
         self.close_dialog(window, cx);
     }
 
+    /// Adds `key` to the server's `authorized_keys` over this tab's connection (KEY-07), once
+    /// it's connected, and says how it went.
+    pub fn install_key(&mut self, key: &Key, cx: &mut Context<Self>) {
+        let Some(shell) = self.shell.clone() else {
+            notify::info(format!("{} isn't connected", self.label), cx);
+            return;
+        };
+        let public_key = key.public_key.clone();
+        let key_title = key.title().to_owned();
+        let host = self.label.clone();
+        cx.spawn(async move |_, cx| {
+            let outcome = shell.install_public_key(&public_key).await;
+            let _ = cx.update(|cx| match outcome {
+                Ok(KeyInstall::Added) => {
+                    notify::info(format!("Added {key_title} to {host}'s authorized_keys"), cx);
+                }
+                // Starts with a fixed word: toasts capitalise the first letter, and a user name
+                // mustn't change case.
+                Ok(KeyInstall::AlreadyPresent) => {
+                    notify::info(
+                        format!("Nothing to add: {host} already accepts {key_title}"),
+                        cx,
+                    );
+                }
+                Err(error) => notify::error(&error, cx),
+            });
+        })
+        .detach();
+    }
+
+    fn export_key_here(&mut self, _: &ExportKeyHere, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(model) = HostsModel::global(cx) else {
+            return;
+        };
+        let keys: Vec<Key> = crate::keychain::list::sorted(model.read(cx).keys())
+            .into_iter()
+            .cloned()
+            .collect();
+        if keys.is_empty() {
+            notify::info(
+                "The keychain has no keys yet; generate or import one first",
+                cx,
+            );
+            return;
+        }
+        let items = keys
+            .iter()
+            .map(|k| PickerItem::new(k.title().to_owned()).detail(k.kind.display_name()))
+            .collect();
+        let title = format!("Add a key to {}'s authorized_keys", self.label);
+        let picker = cx.new(|cx| Picker::new(title, items, window, cx));
+        let subscription = cx.subscribe_in(
+            &picker,
+            window,
+            move |view, _, event: &PickerEvent, window, cx| {
+                if let PickerEvent::Picked(index) = event
+                    && let Some(key) = keys.get(*index)
+                {
+                    view.install_key(key, cx);
+                }
+                view.close_dialog(window, cx);
+            },
+        );
+        self.dialog = Some(Dialog::ChooseKey {
+            picker,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
     /// Drops the dialog. A prompt still inside is dropped unanswered, which cancels it.
     fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The fields sit inside the modal, so its handle covers them too.
         let had_focus = self.dialog.as_ref().is_some_and(|dialog| match dialog {
             Dialog::HostKey { modal, .. } | Dialog::Login { modal, .. } => {
                 modal.focus_handle(cx).contains_focused(window, cx)
+            }
+            Dialog::ChooseKey { picker, .. } => {
+                picker.focus_handle(cx).contains_focused(window, cx)
             }
         });
         self.dialog = None;
@@ -523,6 +613,8 @@ impl Render for RemoteTerminal {
         let theme = cx.theme().clone();
         let status = self.state.as_ref().and_then(status::describe);
         div()
+            .key_context("RemoteTerminal")
+            .on_action(cx.listener(Self::export_key_here))
             .relative()
             .flex()
             .flex_col()
