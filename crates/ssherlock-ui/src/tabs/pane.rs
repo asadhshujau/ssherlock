@@ -137,8 +137,8 @@ impl Focusable for Pane {
 }
 
 impl Pane {
-    /// A pane with one local terminal tab, and the hosts page behind its own tab if saved
-    /// hosts are set up.
+    /// A pane that starts on the hosts page if saved hosts are set up, else with one local
+    /// terminal tab.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let hosts = HostsModel::global(cx).map(|model| {
             let list = cx.new(|cx| HostList::new(model, cx));
@@ -153,7 +153,11 @@ impl Pane {
             is_showing_hosts: false,
             focus_handle: cx.focus_handle(),
         };
-        pane.open_tab(window, cx);
+        if pane.hosts.is_none() {
+            pane.open_tab(window, cx);
+        } else {
+            pane.focus_active(window, cx);
+        }
         pane
     }
 
@@ -888,9 +892,12 @@ mod tests {
         };
         assert_eq!(
             state(cx),
-            (false, DEFAULT_TITLE.to_owned()),
-            "it starts on a terminal"
+            (true, HOSTS_TITLE.to_owned()),
+            "it starts on the hosts page, with no tab open"
         );
+        assert_eq!(pane.read_with(cx, |pane, _| pane.tab_count()), 0);
+        cx.dispatch_action(NewTab);
+        assert_eq!(state(cx), (false, DEFAULT_TITLE.to_owned()));
         cx.dispatch_action(ShowHosts);
         assert_eq!(state(cx), (true, HOSTS_TITLE.to_owned()));
         cx.dispatch_action(ShowHosts);
@@ -937,13 +944,13 @@ mod tests {
         let id = host.id;
         let (pane, model, cx) = pane_with_hosts(&[host], cx);
 
-        cx.dispatch_action(ShowHosts);
+        // The pane starts on the hosts page with the cursor on the first host.
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         let (count, showing, title) = pane.read_with(cx, |pane, cx| {
             (pane.tab_count(), pane.is_showing_hosts(), pane.title(cx))
         });
-        assert_eq!((count, showing), (2, false));
+        assert_eq!((count, showing), (1, false));
         assert_eq!(
             title, "saved-user@127.0.0.1:9",
             "the saved user and port are used"
