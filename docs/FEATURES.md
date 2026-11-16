@@ -33,16 +33,13 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [ ] **CONN-14** Agent forwarding (Pro)
 - [ ] **CONN-15** Environment variables per host (Pro)
 - [ ] **CONN-16** Startup snippet / command run on connect (Pro)
-- [~] **CONN-17** Per-host cipher, KEX, MAC and host-key algorithm preferences (Free)
-  _Left: choosing them per host, with the host editor (Phase 3). The connection already applies them._
-- [~] **CONN-18** Compression toggle (Free)
-  _Left: the per-host toggle, with the host editor (Phase 3). The connection already supports zlib._
+- [x] **CONN-17** Per-host cipher, KEX, MAC and host-key algorithm preferences (Free)
+- [x] **CONN-18** Compression toggle (Free)
 - [ ] **CONN-19** Mosh (Free)
 - [ ] **CONN-20** Telnet (Free)
 - [ ] **CONN-21** Serial / COM port connections (Free, desktop)
 - [x] **CONN-22** Local terminal (user's default shell) (Free)
-- [~] **CONN-23** Quick connect bar: `user@host:port`, `ssh://` URLs, fuzzy match saved hosts (Free)
-  _Left: fuzzy matching of saved hosts, which arrive in Phase 3._
+- [x] **CONN-23** Quick connect bar: `user@host:port`, `ssh://` URLs, fuzzy match saved hosts (Free)
 - [ ] **CONN-24** `ssh://` URL scheme handler at OS level (Free)
 - [ ] **CONN-25** X11 forwarding (+)
 - [ ] **CONN-26** Run a single remote command without opening a shell (+)
@@ -50,20 +47,23 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 ## 2. Hosts & organisation (HOST)
 
-- [ ] **HOST-01** Host record: label, address, port, username, credential or identity, group, tags, notes, colour (Free)
-- [ ] **HOST-02** Groups, nested; children inherit settings (credentials, env, terminal settings) with per-host override (Free)
-- [ ] **HOST-03** Tags, filter by tag (Free)
-- [ ] **HOST-04** Instant search over label, address, tags, notes (Free)
-- [ ] **HOST-05** Sort by name / last used / created; list and grid views (Free)
-- [ ] **HOST-06** Favourites / pinned hosts (Free)
-- [ ] **HOST-07** Recent connections (Free)
-- [ ] **HOST-08** Duplicate host, bulk edit, bulk move to group (Free)
-- [ ] **HOST-09** Trash with restore and permanent delete (Pro)
+- [~] **HOST-01** Host record: label, address, port, username, credential or identity, group, tags, notes, colour (Free)
+  _Left: choosing a credential or identity, with the keychain (Phase 4). Logins use the agent, default keys and password prompts until then._
+- [~] **HOST-02** Groups, nested; children inherit settings (credentials, env, terminal settings) with per-host override (Free)
+  _Left: credentials (Phase 4), environment variables (Phase 8) and terminal settings (HOST-10, Phase 9) join the inheritance when they arrive. Everything a host has today already inherits._
+- [x] **HOST-03** Tags, filter by tag (Free)
+- [x] **HOST-04** Instant search over label, address, tags, notes (Free)
+- [x] **HOST-05** Sort by name / last used / created; list and grid views (Free)
+- [x] **HOST-06** Favourites / pinned hosts (Free)
+- [x] **HOST-07** Recent connections (Free)
+- [x] **HOST-08** Duplicate host, bulk edit, bulk move to group (Free)
+- [x] **HOST-09** Trash with restore and permanent delete (Pro)
 - [ ] **HOST-10** Per-host terminal overrides: theme, font, charset, cursor (Pro)
 - [ ] **HOST-11** Per-host saved port-forwarding rules (see FWD) (Pro)
-- [ ] **HOST-12** Host "Case File" detail panel: notes, last connected, key fingerprint, open sessions (Free)
-- [ ] **HOST-13** Multi-select → connect to all (Free)
-- [ ] **HOST-14** Keyboard-only navigation and editing of the whole host list (Free)
+- [~] **HOST-12** Host "Case File" detail panel: notes, last connected, key fingerprint, open sessions (Free)
+  _Left: the host's key fingerprint from `known_hosts`, with the keychain's key views (KEY-13, Phase 4)._
+- [x] **HOST-13** Multi-select → connect to all (Free)
+- [x] **HOST-14** Keyboard-only navigation and editing of the whole host list (Free)
 - [ ] **HOST-15** Detect OS / distro on connect and show icon (Free)
 - [ ] **HOST-16** Host "address book" with multiple addresses per host (LAN/WAN) (+)
 
@@ -73,8 +73,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [x] **TERM-02** Mouse reporting (X10, SGR, URXVT), bracketed paste, focus events (Free)
 - [x] **TERM-03** OSC 8 hyperlinks, auto-detected URLs, click to open (Free)
 - [ ] **TERM-04** OSC 52 clipboard (opt-in, with prompt) (Free)
-- [~] **TERM-05** Tabs: open, close, reorder, rename, pin, colour by host (Free)
-  _Left: pin and colour by host, with hosts (Phase 3)._
+- [x] **TERM-05** Tabs: open, close, reorder, rename, pin, colour by host (Free)
 - [ ] **TERM-06** Split panes: horizontal/vertical, resize, focus navigation, zoom pane (Free)
 - [ ] **TERM-07** Multiple windows; detach tab to a window (Free)
 - [x] **TERM-08** Configurable scrollback, scrollback search with highlights (Free)
@@ -227,7 +226,8 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [ ] **APP-13** Packaging: `.dmg` + Homebrew cask; `.deb`, `.rpm`, AppImage, Flatpak; `.msi` + winget (Free)
 - [ ] **APP-14** Onboarding / first-run: import existing config, create first host (Free)
 - [ ] **APP-15** In-app changelog and "what's new" (Free)
-- [ ] **APP-16** Dashboard home: recent hosts, active forwards, transfers (Free)
+- [~] **APP-16** Dashboard home: recent hosts, active forwards, transfers (Free)
+  _Left: active forwards (Phase 5) and transfers (Phase 7). Recent hosts ship on the hosts page._
 
 ---
 
