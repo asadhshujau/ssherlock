@@ -171,7 +171,8 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [ ] **SEC-08** Encrypted backup export / import (Pro)
 - [ ] **SEC-09** Local-only mode: works fully without any account (Free)
 - [ ] **SEC-10** Account 2FA (Pro)
-- [ ] **SEC-11** Secrets never in logs, crash reports, or `Debug` output (Free)
+- [x] **SEC-11** Secrets never in logs, crash reports, or `Debug` output (Free)
+  _Crash reports don't exist yet; whatever adds them (Phase 14) must keep this. Logs were checked at `trace` level._
 - [ ] **SEC-12** Clipboard clear after copying a secret (+)
 
 ## 9. Import / export (IMP)
@@ -234,18 +235,18 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 | Area | Done | Total |
 |------|------|-------|
-| CONN | 0 | 27 |
-| HOST | 0 | 16 |
-| TERM | 0 | 28 |
-| KEY  | 0 | 15 |
-| FWD  | 0 | 9  |
+| CONN | 13 | 27 |
+| HOST | 10 | 16 |
+| TERM | 10 | 28 |
+| KEY  | 10 | 15 |
+| FWD  | 0 | 9 |
 | SNIP | 0 | 10 |
 | SFTP | 0 | 12 |
-| SEC  | 0 | 12 |
+| SEC  | 2 | 12 |
 | IMP  | 0 | 11 |
-| TEAM | 0 | 8  |
-| AI   | 0 | 6  |
+| TEAM | 0 | 8 |
+| AI   | 0 | 6 |
 | APP  | 0 | 16 |
-| **Total** | **0** | **170** |
+| **Total** | **45** | **170** |
 
 Update this table when ticking boxes.

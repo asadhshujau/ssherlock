@@ -27,8 +27,15 @@ SSH client should do, with no paid tier. Built with [gpui](https://crates.io/cra
   If you leave out the user, your local user name is used.
 - **Tabs** opened from a saved host carry its colour. Pin a tab to keep it at the front; a
   pinned tab can't be closed until it's unpinned.
-- **Login:** your SSH agent first, then `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa` (asking for
-  a passphrase if a key needs one), then password, then keyboard-interactive (2FA, PAM).
+- **Keychain** (in the Hosts page's sidebar): generate Ed25519, ECDSA or RSA keys, import them
+  from a file, the clipboard or `~/.ssh`, and export them as OpenSSH, PKCS#8 or the public key.
+  Each key shows its SHA-256 and MD5 fingerprints, randomart, and which hosts use it.
+  **Export to host** adds a key to a server's `authorized_keys`, like `ssh-copy-id`.
+  **Identities** bundle a user name with a password and/or key. Hosts and groups pick an
+  identity, a key and a saved password, and inherit them like any other setting.
+- **Login:** the host's saved key first, then your SSH agent, then `~/.ssh/id_ed25519`,
+  `id_ecdsa` and `id_rsa` (asking for a passphrase if a key needs one and remembering it for 15
+  minutes), then the saved password, then asking for one, then keyboard-interactive (2FA, PAM).
 - **Host keys:** a new host shows its SHA-256 fingerprint and randomart before you trust it. A
   changed key gets a red warning that Enter can't accept. Hosts already in
   `~/.ssh/known_hosts` are trusted without asking. SSHerlock reads that file but never writes
@@ -41,6 +48,7 @@ SSH client should do, with no paid tier. Built with [gpui](https://crates.io/cra
 | Quick connect | Cmd+O | Ctrl+Shift+O |
 | Hosts page | Cmd+Shift+H | Ctrl+Shift+H |
 | Pin / unpin tab | Cmd+Alt+P | Ctrl+Shift+Alt+P |
+| Add a key to this server's `authorized_keys` | Cmd+Alt+K | Ctrl+Shift+Alt+K |
 | New tab / close tab | Cmd+T / Cmd+W | Ctrl+Shift+T / Ctrl+Shift+W |
 | Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab | Ctrl+Tab / Ctrl+Shift+Tab |
 | Rename tab | Cmd+R | Ctrl+Shift+R |
@@ -62,6 +70,12 @@ SSHerlock keeps its database of saved hosts (`ssherlock.db`), its `known_hosts` 
 its data folder:
 `~/.local/share/ssherlock/` on Linux, `~/Library/Application Support/io.github.asadhshujau.SSHerlock/`
 on macOS.
+
+Saved keys and passwords are encrypted in the database with a key kept in the OS keychain
+(Keychain on macOS, GNOME Keyring or KWallet on Linux), so copying the database alone reveals
+nothing. Without a keychain, as in some minimal Linux sessions, that key is kept in `vault.key`
+in the data folder, readable only by you, and SSHerlock says so the first time. See
+[ADR 0008](docs/adr/0008-vault.md).
 
 ## Principles
 

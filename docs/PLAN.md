@@ -75,7 +75,7 @@ Progress (update in the PR that changes a phase's status):
 | 1 — Terminal core | done (exit check on GNOME Wayland and Xvfb; macOS by CI). TERM-05, 10, 11, 12, 13 have leftovers noted in FEATURES.md |
 | 2 — SSH core | done (exit check against the Docker test server; real servers checked by hand; CI on Linux and macOS). CONN-17, 18, 23 have leftovers noted in FEATURES.md |
 | 3 — Hosts, groups & storage | done (exit check on GNOME Wayland by hand, Xvfb, weston and a headless GNOME Shell; macOS by CI). **Pending: the manual checks on a Mac** (Cmd shortcuts, Space/Enter on the editor's checkbox and buttons, dark mode). HOST-01, 02, 12 and APP-16 have leftovers noted in FEATURES.md |
-| 4 — Keychain | in progress |
+| 4 — Keychain | done (exit check headless against the Docker test server, with the vault key in a file; macOS by CI). **Pending: the manual checks** with a real OS keychain (GNOME Keyring, macOS Keychain), the save and open file dialogs, and a real server |
 | 5 – 14 | not started |
 
 ---
@@ -171,6 +171,8 @@ Work:
 
 - Vault: master key in the OS keychain (`keyring`), per-secret ChaCha20-Poly1305 with random nonce; `SecretString` everywhere; `Zeroize` on drop.
 - Models: `Key`, `Password`, `Identity`, `Certificate`. Hosts reference these by `Id`.
+  _As built: passwords are saved (sealed) on identities, hosts and groups rather than as a model
+  of their own. Certificates went to Phase 8 with KEY-08 and the rest of certificate auth._
 - Key generation via `russh::keys` (Ed25519, ECDSA, RSA), passphrase support, fingerprint + randomart.
 - Import from file/clipboard/`~/.ssh` scan; export OpenSSH / PEM / public.
 - "Export public key to host" (append to `authorized_keys` over the open session).
