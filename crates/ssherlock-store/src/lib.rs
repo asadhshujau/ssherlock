@@ -13,7 +13,9 @@ mod repository;
 mod rows;
 mod store;
 mod trash;
+pub mod vault;
 
 pub use error::StoreError;
 pub use repository::Repository;
 pub use store::Store;
+pub use vault::{KeyFile, KeyHolder, KeyLocation, OsKeychain, Unlocked, Vault};

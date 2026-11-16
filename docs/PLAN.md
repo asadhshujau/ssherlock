@@ -75,7 +75,8 @@ Progress (update in the PR that changes a phase's status):
 | 1 — Terminal core | done (exit check on GNOME Wayland and Xvfb; macOS by CI). TERM-05, 10, 11, 12, 13 have leftovers noted in FEATURES.md |
 | 2 — SSH core | done (exit check against the Docker test server; real servers checked by hand; CI on Linux and macOS). CONN-17, 18, 23 have leftovers noted in FEATURES.md |
 | 3 — Hosts, groups & storage | done (exit check on GNOME Wayland by hand, Xvfb, weston and a headless GNOME Shell; macOS by CI). **Pending: the manual checks on a Mac** (Cmd shortcuts, Space/Enter on the editor's checkbox and buttons, dark mode). HOST-01, 02, 12 and APP-16 have leftovers noted in FEATURES.md |
-| 4 – 14 | not started |
+| 4 — Keychain | in progress |
+| 5 – 14 | not started |
 
 ---
 

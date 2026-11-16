@@ -25,5 +25,5 @@ pub use algorithms::{AlgorithmPreferences, Compression};
 pub use id::{Id, IdError};
 pub use port::{Port, PortError};
 pub use quick_connect::{ConnectTarget, QuickConnectError};
-pub use secret::{ExposeSecret, SecretBox, SecretString};
+pub use secret::{ExposeSecret, Sealed, SecretBox, SecretString};
 pub use time::Timestamp;

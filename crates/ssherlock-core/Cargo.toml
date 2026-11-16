@@ -9,6 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 jiff = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }

@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use ssherlock_core::hosts::{GroupError, HostError};
 
+use crate::KeyLocation;
+
 /// Why a store operation failed.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -88,6 +90,42 @@ pub enum StoreError {
         /// Its id.
         id: String,
     },
+    /// The OS keychain refused or failed a request for the vault key.
+    #[error("could not {action} the vault key in the OS keychain")]
+    Keychain {
+        /// What was being done: find, read or save.
+        action: &'static str,
+        /// What the keychain said.
+        #[source]
+        source: keyring::Error,
+    },
+    /// The vault key file couldn't be read or written.
+    #[error("could not use the vault key file at {path}")]
+    KeyFile {
+        /// The key file.
+        path: PathBuf,
+        /// What the OS said.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The place this database's vault key was kept no longer has it.
+    #[error("the vault key is missing from {0}, so saved passwords and keys cannot be opened")]
+    VaultKeyMissing(KeyLocation),
+    /// The vault key found doesn't open this database's secrets.
+    #[error("the vault key in {0} does not belong to this database")]
+    VaultWrongKey(KeyLocation),
+    /// The stored vault key isn't 256 bits long.
+    #[error("the vault key has the wrong length")]
+    VaultKeyInvalid,
+    /// The OS couldn't supply random bytes for a key or nonce.
+    #[error("could not get random bytes from the operating system")]
+    Random(#[source] rand::rngs::SysError),
+    /// Encrypting a secret failed.
+    #[error("could not encrypt a secret")]
+    Seal,
+    /// A saved secret couldn't be decrypted: damaged, or sealed by another vault.
+    #[error("could not decrypt a saved secret; it may be damaged")]
+    Unseal,
     /// A thread panicked while holding the database lock; the connection may be mid-way through
     /// something, so it is no longer used.
     #[error("the database is unavailable after an earlier crash; restart SSHerlock")]
