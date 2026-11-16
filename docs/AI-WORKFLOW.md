@@ -14,6 +14,10 @@ table in `docs/PLAN.md`; feature status lives in `docs/FEATURES.md`.
   `FEATURES.md`, then stop and wait.
 - Mark a phase done only after its exit criteria pass. Items that are partly done stay `[~]`,
   with an italic note under them saying what's left and which phase finishes it.
+- **Manual checks don't hold up a merge** (since Phase 4, 2026-11-16). Once the headless exit
+  checks pass, merge the stack and mark the phase done, with the manual checks listed as
+  **Pending** in its `PLAN.md` progress row. The maintainer runs them when they have time and
+  merges any fixes to master themselves. When they report the checks done, remove the note.
 
 ## Branches and PRs
 
