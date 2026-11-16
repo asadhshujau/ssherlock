@@ -1,8 +1,9 @@
 //! Every difference between macOS, Linux and Windows that the UI cares about, in one place
 //! (CLAUDE.md §7): which modifier app shortcuts use, what Alt/Option does in a terminal, which
-//! monospace fonts to look for and whether there is a primary selection.
+//! monospace fonts to look for, whether there is a primary selection and whether middle-click
+//! pastes it.
 
-use gpui::{App, ClipboardItem};
+use gpui::{App, AppContext as _, ClipboardItem, Global};
 use serde::Deserialize;
 
 /// An operating system, for keymap sections that apply to only some (`"os": ["macos"]`).
@@ -69,6 +70,61 @@ pub const ALT_KEY: AltKey = AltKey::Meta;
 /// button pastes it. X11 and Wayland have one; macOS and Windows don't. Matches the targets on
 /// which gpui offers `write_to_primary` / `read_from_primary`.
 pub const HAS_PRIMARY_SELECTION: bool = cfg!(any(target_os = "linux", target_os = "freebsd"));
+
+/// Whether the desktop lets the middle button paste the primary selection. Set once at startup
+/// by [`detect_primary_paste`]; until then, and wherever nothing says otherwise, it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrimaryPaste(pub bool);
+
+impl Global for PrimaryPaste {}
+
+/// Whether a middle click should paste the primary selection here: the platform has one and
+/// the user hasn't turned middle-click paste off.
+pub fn is_primary_paste_enabled(cx: &App) -> bool {
+    HAS_PRIMARY_SELECTION && cx.try_global::<PrimaryPaste>().is_none_or(|paste| paste.0)
+}
+
+/// Reads the desktop's middle-click paste setting in the background and records it as
+/// [`PrimaryPaste`]. GNOME keeps it in `org.gnome.desktop.interface gtk-enable-primary-paste`
+/// (Settings → Mouse & Touchpad, or Tweaks); other desktops don't have one, so it stays on, as
+/// X11 has always done.
+pub fn detect_primary_paste(cx: &mut App) {
+    if !HAS_PRIMARY_SELECTION {
+        return;
+    }
+    let lookup = cx.background_spawn(async {
+        std::process::Command::new("gsettings")
+            .args([
+                "get",
+                "org.gnome.desktop.interface",
+                "gtk-enable-primary-paste",
+            ])
+            .output()
+    });
+    cx.spawn(async move |cx| {
+        let enabled = match lookup.await {
+            Ok(output) if output.status.success() => {
+                parse_gsettings_bool(&String::from_utf8_lossy(&output.stdout))
+            }
+            // No gsettings (not GNOME) or no such key: nothing turned it off.
+            Ok(_) | Err(_) => None,
+        };
+        if let Some(enabled) = enabled {
+            tracing::debug!(enabled, "middle-click paste setting");
+            let _ = cx.update(|cx| cx.set_global(PrimaryPaste(enabled)));
+        }
+    })
+    .detach();
+}
+
+/// `true` or `false` as `gsettings get` prints a boolean.
+fn parse_gsettings_bool(text: &str) -> Option<bool> {
+    match text.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
 
 /// Puts `item` on the primary selection.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -156,6 +212,27 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn gsettings_booleans() {
+        assert_eq!(parse_gsettings_bool("true\n"), Some(true));
+        assert_eq!(parse_gsettings_bool("false"), Some(false));
+        assert_eq!(parse_gsettings_bool(""), None);
+        assert_eq!(parse_gsettings_bool("No such key"), None);
+    }
+
+    #[gpui::test]
+    fn middle_click_paste_follows_the_setting(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            assert_eq!(
+                is_primary_paste_enabled(cx),
+                HAS_PRIMARY_SELECTION,
+                "on until told otherwise"
+            );
+            cx.set_global(PrimaryPaste(false));
+            assert!(!is_primary_paste_enabled(cx));
+        });
+    }
 
     #[test]
     fn mod_expands_per_platform() {

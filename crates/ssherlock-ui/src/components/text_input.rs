@@ -12,12 +12,13 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, KeyContext, KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _,
-    Subscription, Window, actions, div,
+    IntoElement, KeyContext, KeyDownEvent, MouseButton, MouseUpEvent, ParentElement as _, Render,
+    SharedString, Styled as _, Subscription, Window, actions, div,
 };
 use ssherlock_core::SecretString;
 use zeroize::Zeroize as _;
 
+use crate::platform;
 use crate::theme::ActiveTheme as _;
 
 actions!(
@@ -467,6 +468,22 @@ impl TextInput {
 
     fn select_all_action(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.select_all(cx);
+        // On X11 and Wayland, selecting is copying to the primary selection.
+        if let Some(text) = self.selection().filter(|text| !text.is_empty()) {
+            platform::write_to_primary(ClipboardItem::new_string(text), cx);
+        }
+    }
+
+    /// Middle click: pastes the primary selection at the caret, where the desktop allows it.
+    /// The press already focused the field.
+    fn paste_primary(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !platform::is_primary_paste_enabled(cx) {
+            return;
+        }
+        if let Some(text) = platform::read_from_primary(cx).and_then(|item| item.text()) {
+            self.edit(Edit::Insert(&text), cx);
+        }
+        cx.stop_propagation();
     }
 
     fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
@@ -610,6 +627,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::select_all_action))
             .on_action(cx.listener(Self::newline))
+            .on_mouse_up(MouseButton::Middle, cx.listener(Self::paste_primary))
             .flex()
             .min_w_0()
             .overflow_hidden()

@@ -646,7 +646,7 @@ impl TerminalView {
         }
         match event.button {
             MouseButton::Left => self.start_selection(event, cx),
-            MouseButton::Middle if platform::HAS_PRIMARY_SELECTION => {
+            MouseButton::Middle if platform::is_primary_paste_enabled(cx) => {
                 if let Some(text) = platform::read_from_primary(cx).and_then(|item| item.text()) {
                     self.paste_text(text, window, cx);
                 }
