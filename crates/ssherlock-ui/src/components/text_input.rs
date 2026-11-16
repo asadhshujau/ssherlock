@@ -405,6 +405,17 @@ impl TextInput {
         }
     }
 
+    /// Whether the field is empty; works for secret fields too, without revealing anything else.
+    pub fn is_empty(&self) -> bool {
+        self.buffer.text().is_empty()
+    }
+
+    /// A copy of a secret field's text, leaving the field as it is (for a form that may need to
+    /// be submitted again, such as an import that turns out to need a passphrase).
+    pub fn secret_text(&self) -> SecretString {
+        SecretString::from(self.buffer.text())
+    }
+
     /// Hands over a secret field's text and empties the field.
     pub fn take_secret(&mut self, cx: &mut Context<Self>) -> SecretString {
         let secret = SecretString::from(self.buffer.take());

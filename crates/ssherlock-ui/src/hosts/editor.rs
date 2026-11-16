@@ -10,9 +10,9 @@ use std::collections::HashMap;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Subscription, Window,
 };
 use ssherlock_core::hosts::{
     BulkEdit, Change, Colour, EffectiveSettings, Group, GroupError, GroupTree, Host, HostError,
@@ -26,12 +26,12 @@ use super::actions::{CancelEditor, SaveEditor};
 use super::fields;
 use super::model::HostsModel;
 use crate::components::{
-    Button, ButtonStyle, Checkbox, Form, FormField, FormSection, Picker, PickerEvent, PickerItem,
-    Segment, SegmentedControl, TextInput,
+    Button, Checkbox, Form, FormField, FormSection, Picker, PickerEvent, PickerItem, Segment,
+    SegmentedControl, TextInput, sheet,
 };
 use crate::ssh::SshEnvironment;
 use crate::ssh::status::capitalise;
-use crate::theme::{ActiveTheme as _, Theme};
+use crate::theme::ActiveTheme as _;
 
 /// What the editor edits.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -995,9 +995,10 @@ impl Render for HostEditor {
                 })
         };
 
-        overlay(
+        sheet(
             &theme,
             title,
+            "Save",
             form.into_any_element(),
             cx.listener(|editor, _, window, cx| editor.cancel(&CancelEditor, window, cx)),
             cx.listener(|editor, _, window, cx| editor.save(&SaveEditor, window, cx)),
@@ -1020,87 +1021,6 @@ fn algorithm_field_row(
     FormField::new(label, input.clone())
         .hint("Most preferred first, separated by commas")
         .error(error)
-}
-
-/// The dimmed backdrop and the scrolling panel the form sits in, with Cancel and Save.
-fn overlay(
-    theme: &Theme,
-    title: String,
-    form: AnyElement,
-    on_cancel: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-    on_save: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-) -> gpui::Div {
-    div()
-        .absolute()
-        .inset_0()
-        .flex()
-        .justify_center()
-        .items_start()
-        .p(theme.spacing.xl)
-        .child(
-            div()
-                .id("editor-backdrop")
-                .absolute()
-                .inset_0()
-                .bg(theme.colors.modal_scrim)
-                .occlude(),
-        )
-        .child(
-            div()
-                .id("editor")
-                // Without this the backdrop would count as hovered under the panel too.
-                .occlude()
-                .flex()
-                .flex_col()
-                .w(theme.metrics.editor_width)
-                .max_h_full()
-                .rounded(theme.radius.md)
-                .bg(theme.colors.surface)
-                .border(theme.metrics.border_width)
-                .border_color(theme.colors.border)
-                .text_size(theme.text.ui_size)
-                .text_color(theme.colors.text)
-                .child(
-                    div()
-                        .px(theme.spacing.xl)
-                        .pt(theme.spacing.xl)
-                        .pb(theme.spacing.lg)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .id("editor-form")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .px(theme.spacing.xl)
-                        .pb(theme.spacing.lg)
-                        .child(form),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(theme.spacing.md)
-                        .px(theme.spacing.xl)
-                        .py(theme.spacing.lg)
-                        .border_t(theme.metrics.border_width)
-                        .border_color(theme.colors.border)
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_size(theme.text.small_size)
-                                .text_color(theme.colors.text_muted)
-                                .child(format!(
-                                    "Enter or {}+Enter saves \u{00b7} Esc cancels \u{00b7} Tab moves between fields",
-                                    crate::platform::SECONDARY_NAME
-                                )),
-                        )
-                        .child(Button::new("editor-cancel", "Cancel").on_click(on_cancel))
-                        .child(Button::new("editor-save", "Save").style(ButtonStyle::Primary).on_click(on_save)),
-                ),
-        )
 }
 
 #[cfg(test)]

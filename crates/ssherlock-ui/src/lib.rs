@@ -6,6 +6,7 @@
 
 pub mod components;
 pub mod hosts;
+pub mod keychain;
 pub mod keymap;
 pub mod main_window;
 pub mod notify;
@@ -35,6 +36,7 @@ pub fn init(tokio: tokio::runtime::Handle, cx: &mut App) {
     tabs::init(cx);
     ssh::init(cx);
     hosts::init(cx);
+    keychain::init(cx);
     // Last, so every feature's actions exist when their bindings are built.
     keymap::init(cx);
 

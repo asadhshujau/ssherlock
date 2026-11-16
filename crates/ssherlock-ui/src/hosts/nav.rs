@@ -13,6 +13,8 @@ pub enum Section {
     Hosts(Scope),
     /// Hosts with a tag.
     Tag(Tag),
+    /// Saved keys (the keychain).
+    Keys,
     /// Deleted hosts and groups.
     Trash,
 }
@@ -68,7 +70,7 @@ impl NavItem {
 pub fn items(
     hosts: &[Host],
     groups: &[Group],
-    trash_count: usize,
+    counts: Counts,
     is_expanded: impl Fn(Id<Group>) -> bool,
 ) -> Vec<NavItem> {
     let tree = GroupTree::new(groups);
@@ -127,8 +129,20 @@ pub fn items(
         }));
     }
 
-    items.push(entry(Section::Trash, "Trash", trash_count));
+    items.push(NavItem::Heading("Keychain"));
+    items.push(entry(Section::Keys, "Keys", counts.keys));
+    items.push(NavItem::Heading("Deleted"));
+    items.push(entry(Section::Trash, "Trash", counts.trash));
     items
+}
+
+/// How many of the things outside the host list there are, for the navigation counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    /// Saved keys.
+    pub keys: usize,
+    /// Trash entries.
+    pub trash: usize,
 }
 
 #[cfg(test)]
@@ -180,7 +194,8 @@ mod tests {
         let hosts = vec![a, b];
         let groups = vec![prod.clone(), db];
 
-        let collapsed = items(&hosts, &groups, 2, |_| false);
+        let counts = Counts { keys: 3, trash: 2 };
+        let collapsed = items(&hosts, &groups, counts, |_| false);
         assert_eq!(
             labels(&collapsed),
             [
@@ -191,24 +206,37 @@ mod tests {
                 "> prod 2",
                 "[Tags]",
                 "#pg 1",
+                "[Keychain]",
+                "Keys 3",
+                "[Deleted]",
                 "Trash 2",
             ]
         );
         let open_groups = HashSet::from([prod.id]);
-        let open = items(&hosts, &groups, 0, |id| open_groups.contains(&id));
+        let open = items(&hosts, &groups, Counts::default(), |id| {
+            open_groups.contains(&id)
+        });
         assert_eq!(
             labels(&open)[4..6],
             ["v prod 2".to_owned(), "  db 1".to_owned()]
         );
-        assert_eq!(open.iter().filter(|i| i.section().is_none()).count(), 2);
+        assert_eq!(open.iter().filter(|i| i.section().is_none()).count(), 4);
     }
 
     #[test]
     fn empty_lists_have_no_headings() {
-        let only = items(&[], &[], 0, |_| false);
+        let only = items(&[], &[], Counts::default(), |_| false);
         assert_eq!(
             labels(&only),
-            ["All hosts 0", "Favourites 0", "Recent 0", "Trash 0"]
+            [
+                "All hosts 0",
+                "Favourites 0",
+                "Recent 0",
+                "[Keychain]",
+                "Keys 0",
+                "[Deleted]",
+                "Trash 0"
+            ]
         );
     }
 }

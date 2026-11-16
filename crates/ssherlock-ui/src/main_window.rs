@@ -7,6 +7,7 @@ use gpui::{
 };
 use ssherlock_core::app;
 
+use crate::notify::{self, Notifications};
 use crate::tabs::Pane;
 use crate::theme::{ActiveTheme, Appearance, Theme};
 use crate::window_frame::window_frame;
@@ -22,6 +23,8 @@ const MIN_HEIGHT: f32 = 320.;
 /// Root view of the main window: a pane of terminal tabs. The host list joins it in Phase 3.
 pub struct MainWindow {
     pane: Entity<Pane>,
+    /// The app's toasts, drawn over the window's content.
+    notifications: Option<Entity<Notifications>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -41,9 +44,15 @@ impl MainWindow {
             let title = window_title(&pane.read(cx).title(cx));
             window.set_window_title(&title);
         });
+        let notifications = notify::notifications(cx);
+        let mut subscriptions = vec![appearance, title];
+        if let Some(notifications) = &notifications {
+            subscriptions.push(cx.observe(notifications, |_, _, cx| cx.notify()));
+        }
         Self {
             pane,
-            _subscriptions: vec![appearance, title],
+            notifications,
+            _subscriptions: subscriptions,
         }
     }
 }
@@ -52,11 +61,13 @@ impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let content = div()
+            .relative()
             .flex()
             .flex_1()
             .min_h_0()
             .bg(theme.colors.background)
-            .child(self.pane.clone());
+            .child(self.pane.clone())
+            .children(self.notifications.clone());
 
         let title = window_title(&self.pane.read(cx).title(cx));
         window_frame(window, &theme, title.into(), content)
@@ -107,6 +118,31 @@ mod tests {
     use gpui::{point, px, size};
 
     use super::*;
+
+    /// Regression: toasts were collected but no window drew them, so errors went unseen.
+    #[gpui::test]
+    fn the_window_draws_the_toasts(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::notify::init(cx);
+            // Never start the user's real shell from a test.
+            cx.set_global(crate::terminal::DefaultShell(
+                ssherlock_terminal::ShellConfig {
+                    program: ssherlock_terminal::ShellProgram::Command {
+                        program: "/nonexistent/ssherlock-test-shell".into(),
+                        args: Vec::new(),
+                    },
+                    ..ssherlock_terminal::ShellConfig::default()
+                },
+            ));
+        });
+        let (window, cx) = cx.add_window_view(|window, cx| MainWindow {
+            pane: cx.new(|cx| Pane::new(window, cx)),
+            notifications: crate::notify::notifications(cx),
+            _subscriptions: Vec::new(),
+        });
+        let drawn = window.read_with(cx, |w, _| w.notifications.clone());
+        assert!(drawn.is_some());
+    }
 
     /// Regression: requesting server-side decorations left GNOME on Wayland without a title bar.
     #[test]

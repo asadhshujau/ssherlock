@@ -234,6 +234,62 @@ pub fn is_encrypted(private_key: &SecretString) -> Result<bool, SshError> {
         })
 }
 
+/// A private key file found by [`scan_blocking`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoundKey {
+    /// The file.
+    pub path: std::path::PathBuf,
+    /// Its fingerprint, when it can be read without a passphrase (OpenSSH keys always can, as
+    /// can any key with a `.pub` beside it).
+    pub fingerprint: Option<String>,
+}
+
+/// The largest file [`scan_blocking`] reads; private keys are a few KB.
+const SCAN_MAX_BYTES: u64 = 64 * 1024;
+
+/// The private key files in `dir` (usually `~/.ssh`), sorted by name, for importing (KEY-05).
+/// A file counts if it starts like a PEM private key or a `PuTTY` key; `.pub` files,
+/// `known_hosts`, `config` and anything large are skipped. Unreadable entries are skipped too:
+/// this is a convenience list, not an audit.
+pub fn scan_blocking(dir: &std::path::Path) -> Vec<FoundKey> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        tracing::debug!(dir = %dir.display(), "no directory to scan for keys");
+        return Vec::new();
+    };
+    let mut found: Vec<FoundKey> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_none_or(|ext| ext != "pub")
+                && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= SCAN_MAX_BYTES)
+        })
+        .filter_map(|path| {
+            let text = Zeroizing::new(std::fs::read_to_string(&path).ok()?);
+            let head = text.trim_start();
+            let is_key = (head.starts_with("-----BEGIN ") && head.contains("PRIVATE KEY-----"))
+                || head.starts_with("PuTTY-User-Key-File-");
+            if !is_key {
+                return None;
+            }
+            let fingerprint = PrivateKey::from_openssh(head)
+                .ok()
+                .map(|key| fingerprint(key.public_key()))
+                .or_else(|| {
+                    let public =
+                        std::fs::read_to_string(path.with_extension(path.extension().map_or_else(
+                            || "pub".to_owned(),
+                            |ext| format!("{}.pub", ext.to_string_lossy()),
+                        )))
+                        .ok()?;
+                    fingerprints(&public).ok().map(|f| f.sha256)
+                });
+            Some(FoundKey { path, fingerprint })
+        })
+        .collect();
+    found.sort_by(|a, b| a.path.cmp(&b.path));
+    found
+}
+
 /// Fingerprints and randomart for a public key line (KEY-13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fingerprints {
@@ -582,6 +638,45 @@ mod tests {
             fingerprints("not a key"),
             Err(SshError::KeyUnreadable { .. })
         ));
+    }
+
+    #[test]
+    fn scanning_finds_private_keys_only() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let found = scan_blocking(&dir);
+        let names: Vec<String> = found
+            .iter()
+            .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "id_ecdsa",
+                "id_ed25519",
+                "id_ed25519_encrypted",
+                "id_rsa",
+                "id_rsa_pem_encrypted",
+                "id_rsa_pkcs8",
+                "id_unauthorized"
+            ]
+        );
+        let print = |name: &str| {
+            found
+                .iter()
+                .find(|f| f.path.ends_with(name))
+                .unwrap()
+                .fingerprint
+                .clone()
+        };
+        assert_eq!(
+            print("id_ed25519").as_deref(),
+            Some("SHA256:iEssdgZzVEZ0tRYtUlI1D5UFmPQON21E7zMspQmTgqo")
+        );
+        // Encrypted OpenSSH keys still show their fingerprint.
+        assert!(print("id_ed25519_encrypted").is_some());
+        // Encrypted PEM has no public half and no `.pub` beside it.
+        assert_eq!(print("id_rsa_pem_encrypted"), None);
+        assert_eq!(scan_blocking(Path::new("/nonexistent/ssherlock")), []);
     }
 
     #[test]

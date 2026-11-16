@@ -103,6 +103,35 @@
     }
   },
   {
+    "context": "KeyList",
+    "bindings": {
+      "down": "hosts::SelectNext",
+      "up": "hosts::SelectPrevious",
+      "home": "hosts::SelectFirst",
+      "end": "hosts::SelectLast",
+      "n": "keychain::GenerateKey",
+      "i": "keychain::ImportKey",
+      "shift-i": "keychain::ImportFromSshDir",
+      "enter": "keychain::EditKey",
+      "e": "keychain::EditKey",
+      "f2": "keychain::EditKey",
+      "x": "keychain::ExportKey",
+      "c": "keychain::CopyPublicKey",
+      "secondary-c": "keychain::CopyPublicKey",
+      "delete": "keychain::DeleteKey",
+      "backspace": "keychain::DeleteKey"
+    }
+  },
+  {
+    "context": "KeyEditor",
+    "bindings": {
+      "enter": "keychain::SaveKeyEditor",
+      "secondary-enter": "keychain::SaveKeyEditor",
+      "secondary-s": "keychain::SaveKeyEditor",
+      "escape": "keychain::CancelKeyEditor"
+    }
+  },
+  {
     "context": "Trash",
     "bindings": {
       "down": "hosts::SelectNext",
