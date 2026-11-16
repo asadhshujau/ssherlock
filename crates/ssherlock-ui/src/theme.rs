@@ -98,6 +98,51 @@ pub struct Colors {
     pub success: Hsla,
     /// Status dot: in progress or degraded (connecting, reconnecting).
     pub warning: Hsla,
+    /// Behind selected rows in a list.
+    pub row_selected: Hsla,
+    /// The colours a host or group can be marked with.
+    pub marks: MarkColors,
+}
+
+/// The shades of the colour marks hosts and groups can carry (`ssherlock_core::hosts::Colour`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarkColors {
+    /// Red.
+    pub red: Hsla,
+    /// Orange.
+    pub orange: Hsla,
+    /// Yellow.
+    pub yellow: Hsla,
+    /// Green.
+    pub green: Hsla,
+    /// Teal.
+    pub teal: Hsla,
+    /// Blue.
+    pub blue: Hsla,
+    /// Purple.
+    pub purple: Hsla,
+    /// Pink.
+    pub pink: Hsla,
+    /// Grey.
+    pub grey: Hsla,
+}
+
+impl MarkColors {
+    /// The shade for `colour`.
+    pub fn get(&self, colour: ssherlock_core::hosts::Colour) -> Hsla {
+        use ssherlock_core::hosts::Colour;
+        match colour {
+            Colour::Red => self.red,
+            Colour::Orange => self.orange,
+            Colour::Yellow => self.yellow,
+            Colour::Green => self.green,
+            Colour::Teal => self.teal,
+            Colour::Blue => self.blue,
+            Colour::Purple => self.purple,
+            Colour::Pink => self.pink,
+            Colour::Grey => self.grey,
+        }
+    }
 }
 
 /// Colours inside a terminal: the 16 ANSI colours programs pick from, plus defaults.
@@ -206,6 +251,14 @@ pub struct Metrics {
     pub multiline_min_height: Pixels,
     /// Tallest a picker's list grows before it scrolls.
     pub picker_max_height: Pixels,
+    /// Width of the hosts page's navigation column.
+    pub nav_width: Pixels,
+    /// Width of the host details panel.
+    pub detail_width: Pixels,
+    /// Width of a host card in grid view.
+    pub card_width: Pixels,
+    /// Width of a toast notification.
+    pub toast_width: Pixels,
 }
 
 impl Theme {
@@ -245,6 +298,18 @@ impl Theme {
                 danger_text: rgb(0x00ff_ffff).into(),
                 success: rgb(0x0063_b96f).into(),
                 warning: rgb(0x00e0_a84a).into(),
+                row_selected: rgba(0xe0a8_4a33).into(),
+                marks: MarkColors {
+                    red: rgb(0x00e8_6b6b).into(),
+                    orange: rgb(0x00ec_9a5a).into(),
+                    yellow: rgb(0x00e0_c078).into(),
+                    green: rgb(0x009c_c97e).into(),
+                    teal: rgb(0x005c_bec7).into(),
+                    blue: rgb(0x0066_a8ea).into(),
+                    purple: rgb(0x00a9_8ae8).into(),
+                    pink: rgb(0x00e0_86c0).into(),
+                    grey: rgb(0x0090_96a0).into(),
+                },
             },
             terminal: TerminalColors {
                 ansi: [
@@ -308,6 +373,18 @@ impl Theme {
                 danger_text: rgb(0x00ff_ffff).into(),
                 success: rgb(0x002e_7d32).into(),
                 warning: rgb(0x00b2_6a00).into(),
+                row_selected: rgba(0x9961_0029).into(),
+                marks: MarkColors {
+                    red: rgb(0x00c2_3a32).into(),
+                    orange: rgb(0x00c0_5a00).into(),
+                    yellow: rgb(0x0096_6c00).into(),
+                    green: rgb(0x0037_7d2c).into(),
+                    teal: rgb(0x0017_7889).into(),
+                    blue: rgb(0x002c_5fbf).into(),
+                    purple: rgb(0x0073_4cc0).into(),
+                    pink: rgb(0x00b0_3a8a).into(),
+                    grey: rgb(0x006b_7280).into(),
+                },
             },
             terminal: TerminalColors {
                 ansi: [
@@ -401,6 +478,10 @@ impl Default for Metrics {
             form_label_width: px(140.),
             multiline_min_height: px(72.),
             picker_max_height: px(320.),
+            nav_width: px(210.),
+            detail_width: px(300.),
+            card_width: px(210.),
+            toast_width: px(360.),
         }
     }
 }
@@ -478,6 +559,19 @@ mod tests {
         0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
     }
 
+    /// `top` (possibly translucent) painted over the opaque `bottom`.
+    fn over(top: Hsla, bottom: Hsla) -> Hsla {
+        let (t, b): (Rgba, Rgba) = (top.into(), bottom.into());
+        let mix = |a: f32, b: f32| a * t.a + b * (1. - t.a);
+        Rgba {
+            r: mix(t.r, b.r),
+            g: mix(t.g, b.g),
+            b: mix(t.b, b.b),
+            a: 1.,
+        }
+        .into()
+    }
+
     /// WCAG contrast ratio, from 1 (none) to 21 (black on white).
     fn contrast(a: Hsla, b: Hsla) -> f32 {
         let (la, lb) = (luminance(a), luminance(b));
@@ -515,6 +609,18 @@ mod tests {
                 ("success dot on surface", c.success, c.surface, 3.0),
                 ("warning dot on surface", c.warning, c.surface, 3.0),
                 ("danger dot on surface", c.danger, c.surface, 3.0),
+                (
+                    "text on a selected row",
+                    c.text,
+                    over(c.row_selected, c.background),
+                    4.5,
+                ),
+                (
+                    "text on a selected card",
+                    c.text,
+                    over(c.row_selected, c.surface),
+                    4.5,
+                ),
             ];
             for (name, fg, bg, minimum) in pairs {
                 let ratio = contrast(fg, bg);
@@ -523,6 +629,27 @@ mod tests {
                     "{:?} theme: {name} contrast {ratio:.2} < {minimum}",
                     theme.appearance
                 );
+            }
+        }
+    }
+
+    /// Colour marks are graphics next to text, so WCAG asks 3:1 against the surfaces they sit on.
+    #[test]
+    fn colour_marks_stand_out_in_both_themes() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for colour in ssherlock_core::hosts::Colour::ALL {
+                let shade = theme.colors.marks.get(colour);
+                for (name, bg) in [
+                    ("background", theme.colors.background),
+                    ("surface", theme.colors.surface),
+                ] {
+                    let ratio = contrast(shade, bg);
+                    assert!(
+                        ratio >= 3.0,
+                        "{:?}: {colour:?} on {name} contrast {ratio:.2} < 3",
+                        theme.appearance
+                    );
+                }
             }
         }
     }

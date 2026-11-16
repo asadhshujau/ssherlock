@@ -1,7 +1,8 @@
 //! SSHerlock, a desktop SSH client.
 //!
 //! The binary only wires crates together: it resolves the app's directories, sets up logging,
-//! starts the Tokio runtime, tells SSH where its files are and opens the main window. All behaviour lives in the library crates.
+//! starts the Tokio runtime, opens the database, tells SSH where its files are and opens the
+//! main window. All behaviour lives in the library crates.
 #![forbid(unsafe_code)]
 
 mod dirs;
@@ -25,6 +26,7 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "SSHerlock started");
 
+    let database = dirs.as_ref().map(dirs::AppDirs::database);
     let ssh = dirs.as_ref().map(|dirs| {
         let ssh_dir = dirs::ssh_dir();
         ssherlock_ui::ssh::SshEnvironment {
@@ -37,6 +39,15 @@ fn main() -> anyhow::Result<()> {
 
     gpui::Application::new().run(move |cx| {
         ssherlock_ui::init(tokio, cx);
+        // Opened in the background; the hosts page says "loading" until it's ready.
+        match database {
+            Some(path) => {
+                ssherlock_ui::hosts::HostsModel::open(path, cx);
+            }
+            None => {
+                ssherlock_ui::hosts::HostsModel::unavailable("there is no home directory", cx);
+            }
+        }
         if let Some(ssh) = ssh {
             cx.set_global(ssh);
         } else {

@@ -15,6 +15,88 @@
     }
   },
   {
+    "context": "Pane",
+    "os": ["linux", "windows"],
+    "bindings": {
+      "mod-h": "pane::ShowHosts"
+    }
+  },
+  {
+    "context": "Pane",
+    "os": ["macos"],
+    "bindings": {
+      "cmd-shift-h": "pane::ShowHosts"
+    }
+  },
+  {
+    "context": "HostsPage",
+    "bindings": {
+      "tab": "form::FocusNext",
+      "shift-tab": "form::FocusPrevious",
+      "secondary-f": "hosts::FocusSearch"
+    }
+  },
+  {
+    "context": "HostNav",
+    "bindings": {
+      "down": "hosts::SelectNext",
+      "up": "hosts::SelectPrevious",
+      "home": "hosts::SelectFirst",
+      "end": "hosts::SelectLast",
+      "right": "hosts::ExpandGroup",
+      "left": "hosts::CollapseGroup",
+      "enter": "hosts::FocusList",
+      "/": "hosts::FocusSearch"
+    }
+  },
+  {
+    "context": "HostSearch",
+    "bindings": {
+      "down": "hosts::FocusList",
+      "enter": "hosts::FocusList",
+      "escape": "hosts::ClearSearch"
+    }
+  },
+  {
+    "context": "HostList",
+    "bindings": {
+      "down": "hosts::SelectNext",
+      "up": "hosts::SelectPrevious",
+      "right": "hosts::SelectNext",
+      "left": "hosts::SelectPrevious",
+      "home": "hosts::SelectFirst",
+      "end": "hosts::SelectLast",
+      "shift-down": "hosts::ExtendNext",
+      "shift-up": "hosts::ExtendPrevious",
+      "shift-home": "hosts::ExtendToFirst",
+      "shift-end": "hosts::ExtendToLast",
+      "space": "hosts::ToggleSelected",
+      "secondary-a": "hosts::SelectAll",
+      "escape": "hosts::ClearSelection",
+      "enter": "hosts::ConnectSelected",
+      "f": "hosts::ToggleFavourite",
+      "delete": "hosts::TrashSelected",
+      "backspace": "hosts::TrashSelected",
+      "s": "hosts::ChangeSort",
+      "v": "hosts::ToggleLayout",
+      "/": "hosts::FocusSearch"
+    }
+  },
+  {
+    "context": "Trash",
+    "bindings": {
+      "down": "hosts::SelectNext",
+      "up": "hosts::SelectPrevious",
+      "home": "hosts::SelectFirst",
+      "end": "hosts::SelectLast",
+      "enter": "hosts::Restore",
+      "r": "hosts::Restore",
+      "shift-delete": "hosts::DeleteForever",
+      "secondary-shift-delete": "hosts::EmptyTrash",
+      "/": "hosts::FocusSearch"
+    }
+  },
+  {
     "context": "Terminal",
     "bindings": {
       "mod-c": "terminal::Copy",
