@@ -10,6 +10,7 @@ use std::cmp::{Ordering, Reverse};
 use serde::{Deserialize, Serialize};
 
 use super::{Group, GroupTree, Host, Tag};
+use crate::fuzzy;
 use crate::id::Id;
 
 /// How the host list is sorted (HOST-05).
@@ -168,7 +169,7 @@ fn score(host: &Host, terms: &[String]) -> Option<u32> {
     let notes = host.notes.to_lowercase();
     terms.iter().try_fold(0, |total, term| {
         let best = [
-            text_score(&label, term, 100, 80, 60).or_else(|| fuzzy(&label, term)),
+            text_score(&label, term, 100, 80, 60).or_else(|| fuzzy::score(&label, term)),
             text_score(&address, term, 70, 50, 50),
             text_score(&user, term, 40, 30, 30),
             host.tags
@@ -208,32 +209,6 @@ fn text_score(haystack: &str, term: &str, prefix: u32, word: u32, inner: u32) ->
         found = Some(inner);
     }
     found
-}
-
-/// A subsequence match: every character of `term` appears in `haystack` in order. Scores 10 to
-/// 40, more when matched characters sit together or start words.
-fn fuzzy(haystack: &str, term: &str) -> Option<u32> {
-    let mut wanted = term.chars().peekable();
-    let mut bonus = 0u32;
-    let mut previous: Option<char> = None;
-    let mut last_matched = false;
-    for c in haystack.chars() {
-        let Some(&want) = wanted.peek() else { break };
-        if c == want {
-            wanted.next();
-            if last_matched {
-                bonus += 2;
-            }
-            if previous.is_none_or(|p| !p.is_alphanumeric()) {
-                bonus += 3;
-            }
-            last_matched = true;
-        } else {
-            last_matched = false;
-        }
-        previous = Some(c);
-    }
-    wanted.peek().is_none().then(|| 10 + bonus.min(30))
 }
 
 #[cfg(test)]
@@ -408,9 +383,6 @@ mod tests {
         assert_eq!(text_score("prod-db", "db", 3, 2, 1), Some(2));
         assert_eq!(text_score("proddb", "db", 3, 2, 1), Some(1));
         assert_eq!(text_score("prod", "x", 3, 2, 1), None);
-        assert!(fuzzy("prod-db", "pdb").is_some());
-        assert!(fuzzy("prod-db", "bdp").is_none());
-        assert!(fuzzy("prod-db", "pdb") > fuzzy("xpxrxoxdxdxb", "pdb"));
     }
 
     #[test]
