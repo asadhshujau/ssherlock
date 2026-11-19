@@ -22,14 +22,33 @@ pub fn window_frame(
     title: SharedString,
     content: impl IntoElement,
 ) -> AnyElement {
+    let decorations = window.window_decorations();
+    frame(window, theme, title, decorations, content)
+}
+
+/// [`window_frame`] for the given `decorations`, so tests can lay out the client-drawn frame on
+/// a platform that doesn't report it.
+fn frame(
+    window: &mut Window,
+    theme: &Theme,
+    title: SharedString,
+    decorations: Decorations,
+    content: impl IntoElement,
+) -> AnyElement {
     let root = div()
+        .debug_selector(|| "window-content".into())
         .size_full()
+        // Under a client-drawn title bar the root must shrink to the space left below it. As a
+        // flex item its minimum height is otherwise its content's, and a page whose content is
+        // taller than the window (the key details panel) then kept it at the full window
+        // height, pushing the bottom of the page out of the window.
+        .min_h_0()
         .flex()
         .flex_col()
         .font_family(theme.text.ui_family.clone())
         .text_size(theme.text.ui_size);
 
-    match window.window_decorations() {
+    match decorations {
         Decorations::Server => root.child(content).into_any_element(),
         Decorations::Client { tiling } => {
             client_frame(window, theme, title, tiling, root.child(content)).into_any_element()
@@ -269,10 +288,45 @@ fn resize_cursor(edge: ResizeEdge) -> CursorStyle {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{point, px, size};
+    #![allow(clippy::expect_used)]
+
+    use gpui::{Context, Render, TestAppContext, point, px, size};
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::theme::ActiveTheme as _;
+
+    /// A window whose content is much taller than the window, inside the client-drawn frame.
+    struct TallPage;
+
+    impl Render for TallPage {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let decorations = Decorations::Client {
+                tiling: Tiling::default(),
+            };
+            let page = div().flex_none().h(px(5000.));
+            frame(window, &theme, "Tall".into(), decorations, page)
+        }
+    }
+
+    /// Regression: the content kept the full window height under the title bar, so on Linux
+    /// the bottom of a tall page (the key details panel's buttons) was cut off at any scroll.
+    #[gpui::test]
+    fn content_fits_below_the_title_bar(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(crate::theme::Theme::light()));
+        let (_, cx) = cx.add_window_view(|_, _| TallPage);
+        cx.run_until_parked();
+        let viewport = cx.update(|window, _| window.viewport_size());
+        let inset = cx.update(|_, cx| cx.theme().metrics.window_inset);
+        let content = cx.debug_bounds("window-content").expect("content is drawn");
+        assert!(
+            content.bottom() <= viewport.height - inset,
+            "content ends at {:?}, below the window's {:?}",
+            content.bottom(),
+            viewport.height - inset
+        );
+    }
 
     #[test]
     fn resize_edge_finds_grips_on_an_untiled_window() {
