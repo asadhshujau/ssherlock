@@ -6,7 +6,8 @@ How the maintainer wants AI coding assistants (Claude Code and others) to work o
 The maintainer works from several PCs. An assistant's local memory doesn't follow them between
 machines, so **standing preferences and corrections go in this file**, committed to master.
 Local memory is fine as a cache, never as the only copy. Phase status lives in the progress
-table in `docs/PLAN.md`; feature status lives in `docs/FEATURES.md`.
+table in `docs/PLAN.md`; feature status lives in `docs/FEATURES.md`; the manual checks still
+to run live in `docs/MANUAL-CHECKS.md`.
 
 ## Phases
 
@@ -14,10 +15,35 @@ table in `docs/PLAN.md`; feature status lives in `docs/FEATURES.md`.
   `FEATURES.md`, then stop and wait.
 - Mark a phase done only after its exit criteria pass. Items that are partly done stay `[~]`,
   with an italic note under them saying what's left and which phase finishes it.
-- **Manual checks don't hold up a merge** (since Phase 4, 2026-11-16). Once the headless exit
-  checks pass, merge the stack and mark the phase done, with the manual checks listed as
-  **Pending** in its `PLAN.md` progress row. The maintainer runs them when they have time and
-  merges any fixes to master themselves. When they report the checks done, remove the note.
+- **Manual checks don't hold up a merge or the next phase** (since Phase 4, 2026-11-16). Once
+  the headless exit checks pass, merge the stack and mark the phase done. Its manual checks go
+  in `docs/MANUAL-CHECKS.md`, not in the `PLAN.md` progress row (see *Manual checks* below).
+
+## Manual checks
+
+Manual checks are tracked on their own in `docs/MANUAL-CHECKS.md` (since 2026-11-20), so the
+maintainer can choose at any time between building the next phase and working through checks.
+
+- **When a phase is done**, add its manual checks under *Open* in that file, grouped by phase,
+  each one a step the maintainer can follow. Do it in the PR that marks the phase done.
+- **When the maintainer reports a check passes**, tick it and move it to *Done* with the date.
+- **When the maintainer reports a bug**, even in the middle of a phase and even if it belongs
+  to an old phase, fix it then. The fix goes on its own branch off master with its own PR, not
+  on the phase's stack, and carries a regression test (CLAUDE.md §10). If the bug came from a
+  check on the list, or the fix settles one, tick that check in the same PR and note the PR
+  number in *Done*. Then go back to the phase.
+- Never tick a check because a headless run passed. These are the checks a headless run can't
+  cover.
+
+## Answering "what's to do?"
+
+Read `docs/PLAN.md`, `docs/FEATURES.md` and `docs/MANUAL-CHECKS.md` fresh each time; they may
+have changed on another PC.
+
+- **A general question** ("what's to do?", "what's pending?"): show both the open manual
+  checks and the phase in progress or the next one, with any open PRs.
+- **A specific question**: answer only that. "Which manual checks are pending?" gets the open
+  checks. "What phase are we on?" or "what's the next phase?" gets the phase.
 
 ## Branches and PRs
 
@@ -26,8 +52,8 @@ table in `docs/PLAN.md`; feature status lives in `docs/FEATURES.md`.
   depends on an unmerged PR is stacked on that PR's branch.
 - Once a step passes `just check`, commit, push and open its PR without asking again.
 - **Don't merge PRs as they're opened.** Keep stacking until the phase's work is done. Then
-  give the maintainer a checklist of manual checks, merge the whole stack in order, and only
-  then mark the phase done.
+  add the phase's manual checks to `docs/MANUAL-CHECKS.md`, merge the whole stack in order,
+  and only then mark the phase done.
 - Commit straight to master only when the maintainer explicitly asks, as they did for some
   docs-only changes.
 - **Merging a stack:** use merge commits, not squash. For each PR in order:
