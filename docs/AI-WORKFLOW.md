@@ -11,8 +11,8 @@ to run live in `docs/MANUAL-CHECKS.md`.
 
 ## Phases
 
-- **Don't start a phase until the maintainer says so.** When one is done, update `PLAN.md` and
-  `FEATURES.md`, then stop and wait.
+- **Don't start a phase until the maintainer says so.** When one is done, update the docs
+  (see *Keep the docs current*), then stop and wait.
 - Mark a phase done only after its exit criteria pass. Items that are partly done stay `[~]`,
   with an italic note under them saying what's left and which phase finishes it.
 - **Manual checks don't hold up a merge or the next phase** (since Phase 4, 2026-11-16). Once
@@ -34,6 +34,20 @@ maintainer can choose at any time between building the next phase and working th
   number in *Done*. Then go back to the phase.
 - Never tick a check because a headless run passed. These are the checks a headless run can't
   cover.
+
+## Keep the docs current
+
+Docs are updated as part of the work, never left for later (since 2026-11-20).
+
+- **After each phase**, in the PR that marks it done: update `README.md` (features, shortcuts,
+  setup, where data lives) and every other doc the phase changed, along with `PLAN.md`,
+  `FEATURES.md` and `MANUAL-CHECKS.md`. That covers ADRs, `docs/headless-wayland.md`, this
+  file and `CLAUDE.md`.
+- **After fixing a bug or a manual check**, if the fix changes anything the docs say (a
+  shortcut, a behaviour, a setup step, a file location), update those docs in the fix's PR.
+  A fix that changes nothing documented needs no doc change.
+- Before opening either PR, search the docs for what changed (`grep` the README and `docs/`
+  for the feature, shortcut or path) so nothing stale is left behind.
 
 ## Answering "what's to do?"
 
