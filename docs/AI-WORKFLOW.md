@@ -98,8 +98,8 @@ Standing exceptions:
 Test SSH against servers you start yourself: the Docker OpenSSH container in
 `crates/ssherlock-ssh/tests/docker/`, or an in-process russh server inside a test. Never connect
 to a real server. Don't look on the maintainer's machine for hosts, `~/.ssh/config`,
-`known_hosts`, keys or a running agent to try. Checks that need a real server go on the manual
-checklist given at the end of a phase.
+`known_hosts`, keys or a running agent to try. Checks that need a real server go in
+`docs/MANUAL-CHECKS.md`.
 
 ## Check the UI yourself
 
