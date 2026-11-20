@@ -8,7 +8,6 @@ edition = "2024"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/asadhshujau/ssherlock"
-homepage = "https://github.com/asadhshujau/ssherlock"
 
 # Every external version lives here; crates use `dep = { workspace = true }`.
 # Each phase adds the crates it starts using, with a one-line reason (CLAUDE.md §2, §14).
