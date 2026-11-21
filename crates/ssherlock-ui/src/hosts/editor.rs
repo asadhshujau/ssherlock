@@ -1,19 +1,21 @@
-//! [`HostEditor`]: the form for a host, a group, or many hosts at once (HOST-01, 02, 08,
+//! [`HostEditor`]: the form for a host, a group, or many hosts at once (HOST-01, 02, 08, 11,
 //! CONN-17, CONN-18).
 //!
 //! Built only from the shared form components. Fields left empty inherit (or, in a bulk edit,
 //! keep each host's own value); the placeholders say what would be inherited and from where.
 //! Saving checks everything first and shows each problem under its field; nothing is saved
-//! until all of them are fixed.
+//! until all of them are fixed. A host's port-forwarding rules are edited here too, each in a
+//! [`RuleEditor`], and saved with the host.
 
 use std::collections::HashMap;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Subscription,
-    Window,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Subscription, Window, div,
 };
+use ssherlock_core::forwarding::ForwardRule;
 use ssherlock_core::hosts::{
     BulkEdit, Change, Colour, EffectiveSettings, Group, GroupError, GroupTree, Host, HostError,
     HostSettings, Resolved, SettingsError, Source, Tag,
@@ -29,6 +31,7 @@ use crate::components::{
     Button, Checkbox, Form, FormField, FormSection, Picker, PickerEvent, PickerItem, Segment,
     SegmentedControl, TextInput, sheet,
 };
+use crate::forwarding::{RuleEditor, RuleEditorEvent, item};
 use crate::ssh::SshEnvironment;
 use crate::ssh::status::capitalise;
 use crate::theme::ActiveTheme as _;
@@ -87,6 +90,7 @@ enum Field {
     Cipher,
     Mac,
     Password,
+    Rules,
 }
 
 /// The text fields. Some are unused in some modes.
@@ -155,6 +159,12 @@ pub struct HostEditor {
     picker: Option<(Entity<Picker>, Subscription)>,
     /// Groups created from the group picker, until the model has reloaded with them.
     created: Vec<Group>,
+    /// The host's port-forwarding rules as edited so far; saved with the host (HOST-11).
+    rules: Vec<ForwardRule>,
+    /// Each rule's Edit and Remove buttons, in step with `rules`.
+    rule_focus: Vec<(FocusHandle, FocusHandle)>,
+    add_rule_focus: FocusHandle,
+    rule_editor: Option<(Entity<RuleEditor>, Subscription)>,
     focus_handle: FocusHandle,
 }
 
@@ -162,9 +172,10 @@ impl EventEmitter<HostEditorEvent> for HostEditor {}
 
 impl Focusable for HostEditor {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match &self.picker {
-            Some((picker, _)) => picker.focus_handle(cx),
-            None => self.focus_handle.clone(),
+        match (&self.picker, &self.rule_editor) {
+            (Some((picker, _)), _) => picker.focus_handle(cx),
+            (None, Some((editor, _))) => editor.focus_handle(cx),
+            (None, None) => self.focus_handle.clone(),
         }
     }
 }
@@ -247,6 +258,13 @@ impl HostEditor {
             key: settings.key,
             password: settings.password.clone(),
         };
+        let rules: Vec<ForwardRule> = match &mode {
+            EditorMode::EditHost(host) => {
+                model.read(cx).forward_rules_of(host.id).cloned().collect()
+            }
+            _ => Vec::new(),
+        };
+        let rule_focus = rules.iter().map(|_| Self::row_focus(cx)).collect();
         let mut editor = Self {
             model,
             compression: settings.compression,
@@ -267,10 +285,93 @@ impl HostEditor {
             compression_focus: cx.focus_handle().tab_stop(true),
             picker: None,
             created: Vec::new(),
+            rules,
+            rule_focus,
+            add_rule_focus: cx.focus_handle().tab_stop(true),
+            rule_editor: None,
             focus_handle: cx.focus_handle(),
         };
         editor.update_placeholders(cx);
         editor
+    }
+
+    /// Focus handles for one rule row's Edit and Remove buttons.
+    fn row_focus(cx: &mut Context<Self>) -> (FocusHandle, FocusHandle) {
+        (
+            cx.focus_handle().tab_stop(true),
+            cx.focus_handle().tab_stop(true),
+        )
+    }
+
+    /// The host the rules belong to: the one edited, or a stand-in for a new host, replaced
+    /// with its real id on save.
+    fn rules_host(&self) -> Id<Host> {
+        match &self.mode {
+            EditorMode::EditHost(host) => host.id,
+            _ => self.rules.first().map_or_else(Id::generate, |r| r.host),
+        }
+    }
+
+    /// Opens the rule editor on rule `index`, or on a new rule when `None`.
+    fn open_rule_editor(
+        &mut self,
+        index: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rule = index.and_then(|i| self.rules.get(i).cloned());
+        let editing = rule.as_ref().map(|r| r.id);
+        let host = self.rules_host();
+        let editor = cx.new(|cx| RuleEditor::new(host, rule, window, cx));
+        let subscription = cx.subscribe_in(
+            &editor,
+            window,
+            move |this, _, event: &RuleEditorEvent, window, cx| {
+                let RuleEditorEvent::Done(done) = event;
+                let mut focus = this.add_rule_focus.clone();
+                if let Some(rule) = done.clone() {
+                    this.errors.remove(&Field::Rules);
+                    let index = this.rules.iter().position(|r| Some(r.id) == editing);
+                    if let Some(index) = index {
+                        if let (Some(slot), Some((edit, _))) =
+                            (this.rules.get_mut(index), this.rule_focus.get(index))
+                        {
+                            *slot = rule;
+                            focus = edit.clone();
+                        }
+                    } else {
+                        this.rules.push(rule);
+                        this.rule_focus.push(Self::row_focus(cx));
+                    }
+                } else if let Some((edit, _)) = editing
+                    .and_then(|id| this.rules.iter().position(|r| r.id == id))
+                    .and_then(|index| this.rule_focus.get(index))
+                {
+                    focus = edit.clone();
+                }
+                this.rule_editor = None;
+                focus.focus(window);
+                cx.notify();
+            },
+        );
+        self.rule_editor = Some((editor, subscription));
+        cx.notify();
+    }
+
+    /// Takes rule `index` out of the list; nothing is saved until the host is.
+    fn remove_rule(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index < self.rules.len() {
+            self.rules.remove(index);
+            self.rule_focus.remove(index);
+            self.errors.remove(&Field::Rules);
+        }
+        let next = self
+            .rule_focus
+            .get(index)
+            .or_else(|| self.rule_focus.last())
+            .map_or_else(|| self.add_rule_focus.clone(), |(edit, _)| edit.clone());
+        next.focus(window);
+        cx.notify();
     }
 
     fn is_bulk(&self) -> bool {
@@ -784,12 +885,23 @@ impl HostEditor {
             Err(error) => self.fail(Field::Name, error.to_string()),
         }
         self.check_algorithms(&host.settings);
+        let rules: Vec<ForwardRule> = self
+            .rules
+            .iter()
+            .map(|rule| ForwardRule {
+                host: host.id,
+                ..rule.clone()
+            })
+            .collect();
+        if let Err(error) = ForwardRule::validate_all(&rules) {
+            self.fail(Field::Rules, error.to_string());
+        }
         if !self.errors.is_empty() {
             return None;
         }
         let id = host.id;
         self.model
-            .update(cx, |model, cx| model.save_hosts(vec![host], cx));
+            .update(cx, |model, cx| model.save_host_with_rules(host, rules, cx));
         Some(Saved::Host(id))
     }
 
@@ -1251,6 +1363,7 @@ impl Render for HostEditor {
                 .child(main)
                 .child(connection)
                 .child(credentials)
+                .when(!is_group, |form| form.child(self.rules_section(cx)))
                 .child(algorithms)
                 .when(!is_group, |form| {
                     form.child(FormSection::new("Notes").child(self.inputs.notes.clone()))
@@ -1272,6 +1385,72 @@ impl Render for HostEditor {
         .when_some(self.picker.as_ref(), |d, (picker, _)| {
             d.child(picker.clone())
         })
+        .when_some(self.rule_editor.as_ref(), |d, (editor, _)| {
+            d.child(editor.clone())
+        })
+    }
+}
+
+impl HostEditor {
+    /// The host's port-forwarding rules, each with Edit and Remove, and Add rule (HOST-11).
+    fn rules_section(&self, cx: &mut Context<Self>) -> FormSection {
+        let theme = cx.theme().clone();
+        let rows = self
+            .rules
+            .iter()
+            .zip(&self.rule_focus)
+            .enumerate()
+            .map(|(index, (rule, (edit, remove)))| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(theme.spacing.sm)
+                    .child(item::summary(rule, &theme))
+                    .child(
+                        Button::new(("rule-edit", index), "Edit")
+                            .focus_handle(edit)
+                            .on_click(cx.listener(move |editor, _, window, cx| {
+                                editor.open_rule_editor(Some(index), window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(("rule-remove", index), "Remove")
+                            .focus_handle(remove)
+                            .on_click(cx.listener(move |editor, _, window, cx| {
+                                editor.remove_rule(index, window, cx);
+                            })),
+                    )
+            })
+            .collect::<Vec<_>>();
+        let add = div().flex().child(
+            Button::new("rule-add", "Add rule")
+                .focus_handle(&self.add_rule_focus)
+                .on_click(cx.listener(|editor, _, window, cx| {
+                    editor.open_rule_editor(None, window, cx);
+                })),
+        );
+        let note = self.errors.get(&Field::Rules).cloned().map_or_else(
+            || {
+                div()
+                    .text_size(theme.text.small_size)
+                    .text_color(theme.colors.text_muted)
+                    .child(if self.rules.is_empty() {
+                        "None yet. Rules carry ports over this host's connection."
+                    } else {
+                        "Saved with the host"
+                    })
+            },
+            |error| {
+                div()
+                    .text_size(theme.text.small_size)
+                    .text_color(theme.colors.danger)
+                    .child(error)
+            },
+        );
+        FormSection::new("Port forwarding")
+            .children(rows)
+            .child(add)
+            .child(note)
     }
 }
 
@@ -1313,6 +1492,16 @@ mod tests {
         groups: &[Group],
         cx: &'a mut TestAppContext,
     ) -> (Fixture, &'a mut VisualTestContext) {
+        open_with_rules(mode, hosts, groups, &[], cx)
+    }
+
+    fn open_with_rules<'a>(
+        mode: impl FnOnce(&[Group]) -> EditorMode,
+        hosts: &[Host],
+        groups: &[Group],
+        rules: &[ForwardRule],
+        cx: &'a mut TestAppContext,
+    ) -> (Fixture, &'a mut VisualTestContext) {
         cx.update(|cx| {
             crate::keymap::init(cx);
             crate::notify::init(cx);
@@ -1320,6 +1509,7 @@ mod tests {
         let store = Arc::new(Store::open_in_memory().unwrap());
         store.upsert_all(groups).unwrap();
         store.upsert_all(hosts).unwrap();
+        store.upsert_all(rules).unwrap();
         let model = cx.update(|cx| HostsModel::install(store, cx));
         cx.run_until_parked();
         let mode = mode(groups);
@@ -1727,5 +1917,143 @@ mod tests {
         assert_eq!(Tag::format_list(&b2.tags), "new");
         assert_eq!(a2.settings.username.as_deref(), Some("alice"), "kept");
         assert_eq!(b2.settings.port, Port::new(2222), "kept");
+    }
+
+    fn local_rule(host: Id<Host>, port: u16, label: &str) -> ForwardRule {
+        let mut rule = ForwardRule::new(
+            host,
+            ssherlock_core::forwarding::Forward::Local {
+                listen: ssherlock_core::forwarding::Listen::localhost(Port::new(port).unwrap()),
+                destination: ssherlock_core::forwarding::Destination {
+                    host: "db.internal".parse().unwrap(),
+                    port: Port::new(5432).unwrap(),
+                },
+            },
+            at(1),
+        );
+        label.clone_into(&mut rule.label);
+        rule
+    }
+
+    #[gpui::test]
+    fn a_new_host_is_saved_with_a_rule_typed_into_the_rule_editor(cx: &mut TestAppContext) {
+        let (f, cx) = open(|_| EditorMode::NewHost { group: None }, &[], &[], cx);
+        cx.simulate_input("db.example.com");
+        f.editor.update_in(cx, |editor, window, cx| {
+            editor.open_rule_editor(None, window, cx);
+        });
+        // Kind (Local), then the name, port, address, destination host and port.
+        cx.simulate_keystrokes("tab");
+        cx.simulate_input("Postgres");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_input("15432");
+        cx.simulate_keystrokes("tab tab");
+        cx.simulate_input("db.internal");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_input("5432");
+        // Enter finishes the rule, not the host.
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(f.editor.read_with(cx, |e, _| e.rule_editor.is_none()));
+        assert!(f.events.borrow().is_empty());
+        assert_eq!(f.editor.read_with(cx, |e, _| e.rules.len()), 1);
+
+        f.editor.update_in(cx, |editor, window, cx| {
+            editor.save(&SaveEditor, window, cx);
+        });
+        cx.run_until_parked();
+        let (hosts, rules) = f
+            .model
+            .read_with(cx, |m, _| (m.hosts().to_vec(), m.forward_rules().to_vec()));
+        let [host] = hosts.as_slice() else {
+            unreachable!("one host, got {hosts:?}")
+        };
+        let [rule] = rules.as_slice() else {
+            unreachable!("one rule, got {rules:?}")
+        };
+        assert_eq!(rule.host, host.id);
+        assert_eq!(rule.title(), "Postgres");
+        assert_eq!(
+            rule.forward.to_string(),
+            "localhost:15432 \u{2192} db.internal:5432"
+        );
+        assert!(rule.is_enabled && !rule.auto_start);
+    }
+
+    #[gpui::test]
+    fn rules_are_edited_and_removed_and_saved_with_the_host(cx: &mut TestAppContext) {
+        let host = Host::new("example.com".parse().unwrap(), at(1));
+        let first = local_rule(host.id, 8080, "first");
+        let second = local_rule(host.id, 8081, "second");
+        let original = host.clone();
+        let (f, cx) = open_with_rules(
+            move |_| EditorMode::EditHost(original),
+            std::slice::from_ref(&host),
+            &[],
+            &[first, second.clone()],
+            cx,
+        );
+        assert_eq!(f.editor.read_with(cx, |e, _| e.rules.len()), 2);
+        f.editor.update_in(cx, |editor, window, cx| {
+            editor.remove_rule(0, window, cx);
+            editor.open_rule_editor(Some(0), window, cx);
+        });
+        // The name replaced; then past port, address, destination and Enabled to auto-start.
+        cx.simulate_keystrokes("tab secondary-a");
+        cx.simulate_input("renamed");
+        cx.simulate_keystrokes("tab tab tab tab tab tab");
+        crate::components::form::tests::press(cx, "space");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(f.editor.read_with(cx, |e, _| e.rule_editor.is_none()));
+        f.editor.update_in(cx, |editor, window, cx| {
+            editor.save(&SaveEditor, window, cx);
+        });
+        cx.run_until_parked();
+
+        let rules = f.model.read_with(cx, |m, _| m.forward_rules().to_vec());
+        let [rule] = rules.as_slice() else {
+            unreachable!("one rule left, got {rules:?}")
+        };
+        assert_eq!(rule.id, second.id);
+        assert_eq!(rule.label, "renamed");
+        assert!(rule.auto_start);
+    }
+
+    #[gpui::test]
+    fn clashing_rules_are_shown_and_nothing_is_saved(cx: &mut TestAppContext) {
+        let host = Host::new("example.com".parse().unwrap(), at(1));
+        let original = host.clone();
+        let (f, cx) = open(
+            move |_| EditorMode::EditHost(original),
+            std::slice::from_ref(&host),
+            &[],
+            cx,
+        );
+        f.editor.update_in(cx, |editor, window, cx| {
+            editor
+                .inputs
+                .name
+                .update(cx, |i, cx| i.set_text("changed", cx));
+            for label in ["a", "b"] {
+                editor.rules.push(local_rule(host.id, 8080, label));
+                editor.rule_focus.push(HostEditor::row_focus(cx));
+            }
+            editor.save(&SaveEditor, window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            f.editor
+                .read_with(cx, |e, _| e.error(Field::Rules).map(str::to_owned)),
+            Some("Two rules listen on port 8080 of the same machine".to_owned())
+        );
+        assert!(f.events.borrow().is_empty());
+        let (label, rules) = f.model.read_with(cx, |m, _| {
+            (
+                m.host(host.id).map(|h| h.label.clone()),
+                m.forward_rules().len(),
+            )
+        });
+        assert_eq!((label.as_deref(), rules), (Some(""), 0));
     }
 }

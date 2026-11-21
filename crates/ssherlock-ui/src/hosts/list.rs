@@ -14,6 +14,7 @@ use gpui::{
     ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
     div,
 };
+use ssherlock_core::forwarding::ForwardRule;
 use ssherlock_core::hosts::search::{self, HostQuery, Scope, SortOrder};
 use ssherlock_core::hosts::{BulkEdit, Change, Group, GroupTree, Host, resolve};
 use ssherlock_core::{ConnectTarget, Id, Timestamp, time};
@@ -607,16 +608,23 @@ impl HostList {
     ) {
         let now = Timestamp::now();
         let model = self.model.read(cx);
-        let copies: Vec<Host> = self
+        let copies: Vec<(Host, Vec<ForwardRule>)> = self
             .targets()
             .iter()
             .filter_map(|id| model.host(*id))
-            .map(|host| host.duplicate(now))
+            .map(|host| {
+                let copy = host.duplicate(now);
+                let rules = model
+                    .forward_rules_of(host.id)
+                    .map(|rule| rule.copy_for(copy.id, now))
+                    .collect();
+                (copy, rules)
+            })
             .collect();
-        self.pending_cursor = copies.first().map(|h| h.id);
+        self.pending_cursor = copies.first().map(|(h, _)| h.id);
         if !copies.is_empty() {
             self.model
-                .update(cx, |model, cx| model.save_hosts(copies, cx));
+                .update(cx, |model, cx| model.save_copies(copies, cx));
         }
     }
 
@@ -1602,6 +1610,39 @@ mod tests {
                 .expect("created");
             assert_eq!(m.hosts().first().and_then(|h| h.group), Some(fresh.id));
         });
+    }
+
+    #[gpui::test]
+    fn duplicating_a_host_copies_its_forwarding_rules(cx: &mut TestAppContext) {
+        use ssherlock_core::forwarding::{Forward, Listen};
+
+        let web = host("web", "web.example.com");
+        let rule = ForwardRule::new(
+            web.id,
+            Forward::Dynamic {
+                listen: Listen::localhost(ssherlock_core::Port::new(1080).unwrap()),
+            },
+            at(0),
+        );
+        let (f, cx) = page(std::slice::from_ref(&web), &[], cx);
+        f.model
+            .update(cx, |m, cx| m.save_forward_rule(rule.clone(), cx));
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("secondary-d");
+        cx.run_until_parked();
+        let (copy, rules) = f.model.read_with(cx, |m, _| {
+            let copy = m.hosts().iter().find(|h| h.id != web.id).map(|h| h.id);
+            (copy, m.forward_rules().to_vec())
+        });
+        let copy = copy.expect("a copy");
+        assert_eq!(rules.len(), 2);
+        let copied = rules
+            .iter()
+            .find(|r| r.host == copy)
+            .expect("a copied rule");
+        assert_ne!(copied.id, rule.id);
+        assert_eq!(copied.forward, rule.forward);
     }
 
     #[gpui::test]
