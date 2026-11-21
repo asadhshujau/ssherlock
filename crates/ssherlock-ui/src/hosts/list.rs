@@ -37,6 +37,7 @@ use crate::components::form::{FocusNext, FocusPrevious};
 use crate::components::{
     Button, ButtonStyle, Picker, PickerEvent, PickerItem, TextInput, TextInputEvent,
 };
+use crate::forwarding::{ForwardsModel, PortAuthority, PortAuthorityEvent};
 use crate::keychain::{IdentityList, KeyList, KeyListEvent};
 use crate::ssh::SshEnvironment;
 use crate::theme::{ActiveTheme as _, Theme};
@@ -78,6 +79,9 @@ pub struct HostList {
     keys: Entity<KeyList>,
     /// The identities page, shown when "Identities" is chosen.
     identities: Entity<IdentityList>,
+    /// The Port forwarding page, shown when "Rules" is chosen; `None` without a forwards
+    /// model (only in tests that don't install one).
+    pub(crate) port_authority: Option<Entity<PortAuthority>>,
     /// A host just saved, to put the cursor on once it shows up.
     pending_cursor: Option<Id<Host>>,
     nav_focus: FocusHandle,
@@ -97,6 +101,10 @@ impl Focusable for HostList {
             Some((picker, _)) => picker.focus_handle(cx),
             None if self.section == Section::Keys => self.keys.focus_handle(cx),
             None if self.section == Section::Identities => self.identities.focus_handle(cx),
+            None if self.section == Section::Forwarding => self
+                .port_authority
+                .as_ref()
+                .map_or_else(|| self.list_focus.clone(), |page| page.focus_handle(cx)),
             None => self.list_focus.clone(),
         }
     }
@@ -104,11 +112,13 @@ impl Focusable for HostList {
 
 impl HostList {
     /// The page over `model`.
-    pub fn new(model: Entity<HostsModel>, cx: &mut Context<Self>) -> Self {
+    pub fn new(model: Entity<HostsModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::field("", cx).placeholder("Search hosts"));
         let keys = cx.new(|cx| KeyList::new(model.clone(), cx));
         let identities = cx.new(|cx| IdentityList::new(model.clone(), cx));
-        let subscriptions = vec![
+        let port_authority = ForwardsModel::global(cx)
+            .map(|forwards| cx.new(|cx| PortAuthority::new(model.clone(), forwards, window, cx)));
+        let mut subscriptions = vec![
             // The keychain pages' dialogs are drawn over the whole page, so it redraws with them.
             cx.observe(&keys, |_, _, cx| cx.notify()),
             cx.observe(&identities, |_, _, cx| cx.notify()),
@@ -130,6 +140,21 @@ impl HostList {
                 }
             }),
         ];
+        if let Some(page) = &port_authority {
+            // Its dialogs are drawn over the whole page, so it redraws with them.
+            subscriptions.push(cx.observe(page, |_, _, cx| cx.notify()));
+            subscriptions.push(cx.subscribe_in(
+                page,
+                window,
+                |list, _, event: &PortAuthorityEvent, window, cx| {
+                    let PortAuthorityEvent::EditHost(id) = event;
+                    let host = list.model.read(cx).host(*id).cloned();
+                    if let Some(host) = host {
+                        list.open_editor(EditorMode::EditHost(host), window, cx);
+                    }
+                },
+            ));
+        }
         let mut list = Self {
             model,
             search,
@@ -144,6 +169,7 @@ impl HostList {
             editor: None,
             keys,
             identities,
+            port_authority,
             pending_cursor: None,
             nav_focus: cx.focus_handle().tab_stop(true),
             list_focus: cx.focus_handle().tab_stop(true),
@@ -179,7 +205,11 @@ impl HostList {
         let still_there = match &self.section {
             Section::Hosts(Scope::Group(id)) => tree.get(*id).is_some(),
             Section::Tag(tag) => model.hosts().iter().any(|h| h.tags.contains(tag)),
-            Section::Hosts(_) | Section::Keys | Section::Identities | Section::Trash => true,
+            Section::Hosts(_)
+            | Section::Forwarding
+            | Section::Keys
+            | Section::Identities
+            | Section::Trash => true,
         };
         if !still_there {
             self.section = Section::all();
@@ -195,11 +225,13 @@ impl HostList {
                 tag: Some(tag.clone()),
                 scope: Scope::All,
             },
-            Section::Keys | Section::Identities | Section::Trash => HostQuery::default(),
+            Section::Forwarding | Section::Keys | Section::Identities | Section::Trash => {
+                HostQuery::default()
+            }
         };
         self.visible = if matches!(
             self.section,
-            Section::Keys | Section::Identities | Section::Trash
+            Section::Forwarding | Section::Keys | Section::Identities | Section::Trash
         ) {
             Vec::new()
         } else {
@@ -221,7 +253,8 @@ impl HostList {
         cx.notify();
     }
 
-    fn show(&mut self, section: Section, cx: &mut Context<Self>) {
+    /// Shows `section`, as choosing it in the navigation column does.
+    pub fn show(&mut self, section: Section, cx: &mut Context<Self>) {
         if self.section != section {
             self.section = section;
             self.selection = Selection::default();
@@ -235,6 +268,7 @@ impl HostList {
     fn nav_items(&self, cx: &App) -> Vec<NavItem> {
         let model = self.model.read(cx);
         let counts = nav::Counts {
+            forward_rules: model.forward_rules().len(),
             keys: model.keys().len(),
             identities: model.identities().len(),
             trash: model.trash().len(),
@@ -508,6 +542,11 @@ impl HostList {
         match self.section {
             Section::Keys => return self.keys.focus_handle(cx).focus(window),
             Section::Identities => return self.identities.focus_handle(cx).focus(window),
+            Section::Forwarding => {
+                if let Some(page) = &self.port_authority {
+                    return page.focus_handle(cx).focus(window);
+                }
+            }
             _ => {}
         }
         self.list_focus.focus(window);
@@ -771,6 +810,11 @@ impl Render for HostList {
             })
             .children(self.keys.read(cx).overlay())
             .children(self.identities.read(cx).overlay())
+            .children(
+                self.port_authority
+                    .as_ref()
+                    .and_then(|page| page.read(cx).overlay(cx)),
+            )
     }
 }
 
@@ -974,6 +1018,7 @@ impl HostList {
             Section::Hosts(Scope::Recent) => "Recent".to_owned(),
             Section::Hosts(Scope::Group(id)) => tree.path(*id),
             Section::Tag(tag) => format!("#{tag}"),
+            Section::Forwarding => "Port forwarding".to_owned(),
             Section::Keys => "Keys".to_owned(),
             Section::Identities => "Identities".to_owned(),
             Section::Trash => "Trash".to_owned(),
@@ -1222,6 +1267,11 @@ impl HostList {
         match self.section {
             Section::Keys => return page.child(self.keys.clone()),
             Section::Identities => return page.child(self.identities.clone()),
+            Section::Forwarding => {
+                if let Some(authority) = &self.port_authority {
+                    return page.child(authority.clone());
+                }
+            }
             _ => {}
         }
         page.child(
@@ -1297,7 +1347,7 @@ mod tests {
         let model = cx.update(|cx| HostsModel::install(store, cx));
         cx.run_until_parked();
         let (list, cx) = cx.add_window_view(|window, cx| {
-            let list = HostList::new(model.clone(), cx);
+            let list = HostList::new(model.clone(), window, cx);
             list.list_focus.focus(window);
             list
         });
