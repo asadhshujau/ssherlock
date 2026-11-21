@@ -4,9 +4,9 @@ A Rust SSH client. Hosts, keys, port forwarding, snippets, SFTP, sync — everyt
 SSH client should do, with no paid tier. Built with [gpui](https://crates.io/crates/gpui) and
 [russh](https://crates.io/crates/russh).
 
-> **Status: early development (Phase 3 done, Phase 4 next).** SSHerlock runs local terminals in
-> tabs, keeps saved hosts in nested groups, and connects to them or to servers you type in.
-> Saved keys and passwords come with the keychain in Phase 4. Follow
+> **Status: early development (Phase 5 done, milestone M1; Phase 6 next).** SSHerlock runs
+> local terminals in tabs, keeps saved hosts in nested groups, connects to them with saved keys
+> and passwords, and forwards ports over them. Snippets come in Phase 6. Follow
 > [docs/PLAN.md](docs/PLAN.md) for the build order and [docs/FEATURES.md](docs/FEATURES.md) for
 > the full checklist.
 
@@ -42,6 +42,23 @@ SSH client should do, with no paid tier. Built with [gpui](https://crates.io/cra
   to it; keys you trust are saved in SSHerlock's own `known_hosts`, in the data folder below.
 - **Staying connected:** keep-alive every 15 seconds with the latency in the status bar, and
   automatic reconnection with backoff when the network drops or the machine sleeps.
+- **Port forwarding:** each host keeps its own rules, edited under **Port forwarding** in the
+  host's editor. There are three kinds:
+  - **Local** (`ssh -L`): a port on this machine reaches a host and port the server can reach,
+    such as a database behind it.
+  - **Remote** (`ssh -R`): a port on the server reaches something on this machine.
+  - **SOCKS proxy** (`ssh -D`): a SOCKS5 proxy on this machine whose connections leave from the
+    server.
+
+  Each rule listens on localhost only or on all interfaces. It can be disabled without losing
+  its settings, and set to start whenever a tab to the host opens.
+
+  The **Port forwarding → Rules** page in the Hosts sidebar lists every rule, grouped by host.
+  It shows what each rule is doing, its traffic and open connections, and why it failed if it
+  did. Rules started there run over a connection of their own, with no terminal, which closes
+  once its last rule stops. Forwards wait out a dropped connection and start again when it's
+  back. On that page, Enter or Space starts or stops the rule under the cursor, E opens its
+  host's editor, and Shift+S stops everything.
 
 | Shortcut | macOS | Linux |
 |----------|-------|-------|
@@ -66,8 +83,8 @@ On Linux the shortcuts add Shift so plain Ctrl keys still reach the shell. All o
 [keymap/default.json](crates/ssherlock-ui/src/keymap/default.json). Right-click in a terminal
 for copy, paste, find, clear scrollback and reset.
 
-SSHerlock keeps its database of saved hosts (`ssherlock.db`), its `known_hosts` and its logs in
-its data folder:
+SSHerlock keeps its database of saved hosts, keys, identities and forwarding rules
+(`ssherlock.db`), its `known_hosts` and its logs in its data folder:
 `~/.local/share/ssherlock/` on Linux, `~/Library/Application Support/io.github.asadhshujau.SSHerlock/`
 on macOS.
 

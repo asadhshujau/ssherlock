@@ -76,7 +76,8 @@ Progress (update in the PR that changes a phase's status):
 | 2 — SSH core | done (exit check against the Docker test server; real servers checked by hand; CI on Linux and macOS). CONN-17, 18, 23 have leftovers noted in FEATURES.md |
 | 3 — Hosts, groups & storage | done (exit check on GNOME Wayland by hand, Xvfb, weston and a headless GNOME Shell; macOS by CI). HOST-01, 02, 12 and APP-16 have leftovers noted in FEATURES.md |
 | 4 — Keychain | done (exit check headless against the Docker test server, with the vault key in a file; macOS by CI) |
-| 5 – 14 | not started |
+| 5 — Port forwarding | done: M1 reached. The exit check ran headless against OpenSSH in Docker (Linux CI) and an in-process server (both platforms): local forward to a service on the server, SOCKS by name, remote forward, restart after a dropped session. The browser check is in MANUAL-CHECKS.md |
+| 6 – 14 | not started |
 
 Manual checks still to run are tracked in [`MANUAL-CHECKS.md`](MANUAL-CHECKS.md). They don't
 hold up the next phase.

@@ -43,6 +43,33 @@ Against a real server:
 - [ ] Log in with a saved password and with an identity; restart the app and log in again
       without retyping anything.
 
+### Phase 5 — Port forwarding
+
+Against a real server:
+
+- [ ] Add a Local rule to a database the server can reach (e.g. `localhost:15432` →
+      `localhost:5432`), start it from Port forwarding → Rules, and connect a client (`psql -h
+      localhost -p 15432`). The page shows the traffic and open connection.
+- [ ] Add a SOCKS proxy rule, start it, and point a browser at it (Firefox: SOCKS5 on
+      `localhost` and its port, with "Proxy DNS when using SOCKS v5"). Pages load as if
+      browsing from the server; a name only the server can resolve works.
+- [ ] Add a Remote rule (e.g. the server's `localhost:9000` → this machine's `localhost:3000`
+      with something listening there), start it, and `curl localhost:9000` on the server.
+- [ ] Set a rule to start when connecting, open a tab to the host: the page says "Active in a
+      terminal tab", and closing the tab stops it.
+- [ ] With a forward running, turn Wi-Fi off for half a minute and on again (or sleep the
+      laptop): the forward shows "Waiting for the connection…", then Active, and works again.
+- [ ] A rule on "All interfaces" is reachable from another machine on the network.
+
+On Linux:
+
+- [ ] A Local rule on a port below 1024 fails with a clear reason on the page.
+
+On a Mac:
+
+- [ ] The rule editor and the Port forwarding page look right in light and dark mode, and
+      Cmd+Enter saves in the rule editor.
+
 ## Done
 
 | Date | Phase | Check | Result |
