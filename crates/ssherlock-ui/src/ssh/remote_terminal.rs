@@ -1,113 +1,30 @@
 //! [`RemoteTerminal`]: a terminal running a shell on an SSH server.
 //!
 //! It wraps an ordinary [`TerminalView`] fed by [`spawn_shell`], and adds what only a remote
-//! terminal needs: the host key and login dialogs the session asks for, and the status bar. It
-//! re-emits the terminal's [`TerminalViewEvent`]s, so the pane treats it like any terminal.
+//! terminal needs: the host key and login dialogs the session asks for ([`SessionPrompts`]),
+//! and the status bar. It re-emits the terminal's [`TerminalViewEvent`]s, so the pane treats
+//! it like any terminal.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
     Subscription, Task, Window, div,
 };
+use ssherlock_core::ConnectTarget;
 use ssherlock_core::keychain::Key;
-use ssherlock_core::{ConnectTarget, SecretString};
-use ssherlock_ssh::auth::{AuthMethod, AuthPrompt, default_key_files};
-use ssherlock_ssh::known_hosts::{HostHashing, randomart};
-use ssherlock_ssh::session::{ConnectConfig, DEFAULT_PORT, HostKeyDecision, HostKeyPrompt};
-use ssherlock_ssh::{
-    ConnectionHandle, ConnectionState, HostKeys, KeyInstall, RemoteShellConfig, SessionEvent,
-    spawn_shell,
-};
+use ssherlock_ssh::{ConnectionHandle, ConnectionState, KeyInstall, SessionEvent, spawn_shell};
 use ssherlock_terminal::{PtyExit, PtyIo, PtyOutput, TerminalSize};
 use tokio::sync::mpsc;
 
 use super::actions::ExportKeyHere;
-use super::dialogs::{KeyRow, host_key_text, login_text};
-use super::{ConnectOptions, OpenedCredentials, Passphrases, SshEnvironment, status};
-use crate::components::{
-    InputKind, Modal, ModalEvent, Picker, PickerEvent, PickerItem, TextInput, TextInputEvent,
-};
+use super::prompts::{SessionPrompts, SessionPromptsEvent};
+use super::{ConnectOptions, EVENT_CAPACITY, prepare_connection, status};
+use crate::components::{Picker, PickerEvent, PickerItem};
 use crate::hosts::HostsModel;
 use crate::notify;
-use crate::runtime::TokioHandle;
-use crate::terminal::{TerminalView, TerminalViewEvent, mono_family};
+use crate::terminal::{TerminalView, TerminalViewEvent};
 use crate::theme::ActiveTheme as _;
-
-/// Opens the saved key and password `options` name, so the login can try them first. If they
-/// can't be opened, says why and logs in without them (the agent, key files and prompts still
-/// work).
-fn open_saved(options: &ConnectOptions, cx: &mut App) -> OpenedCredentials {
-    if options.credentials.is_empty() {
-        return OpenedCredentials::default();
-    }
-    let Some(model) = HostsModel::global(cx) else {
-        return OpenedCredentials::default();
-    };
-    let opened = {
-        let model = model.read(cx);
-        match model.vault() {
-            Some(vault) => options
-                .credentials
-                .open(model.keys(), vault)
-                .map_err(|error| error.to_string()),
-            None => Err(model
-                .vault_problem()
-                .map_or_else(String::new, |p| p.to_string())),
-        }
-    };
-    opened.unwrap_or_else(|reason| {
-        tracing::warn!(%reason, "logging in without the saved credentials");
-        notify::info(format!("Saved credentials weren't used: {reason}"), cx);
-        OpenedCredentials::default()
-    })
-}
-
-/// Session events in flight to the view: a few state changes and at most one question at a
-/// time (the session waits for each answer), so a small buffer never fills in practice.
-const EVENT_CAPACITY: usize = 16;
-
-/// A question the session is waiting on.
-enum Dialog {
-    HostKey {
-        prompt: Option<HostKeyPrompt>,
-        modal: Entity<Modal>,
-        _subscription: Subscription,
-    },
-    Login {
-        prompt: Option<AuthPrompt>,
-        modal: Entity<Modal>,
-        inputs: Vec<(Entity<TextInput>, bool)>,
-        _subscriptions: Vec<Subscription>,
-    },
-    /// Choosing a key to add to the server's `authorized_keys`.
-    ChooseKey {
-        picker: Entity<Picker>,
-        _subscription: Subscription,
-    },
-}
-
-impl Dialog {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match self {
-            Self::HostKey { modal, .. } => modal.focus_handle(cx),
-            Self::Login { modal, inputs, .. } => inputs.first().map_or_else(
-                || modal.focus_handle(cx),
-                |(input, _)| input.focus_handle(cx),
-            ),
-            Self::ChooseKey { picker, .. } => picker.focus_handle(cx),
-        }
-    }
-
-    fn element(&self) -> AnyElement {
-        match self {
-            Self::HostKey { modal, .. } | Self::Login { modal, .. } => {
-                modal.clone().into_any_element()
-            }
-            Self::ChooseKey { picker, .. } => picker.clone().into_any_element(),
-        }
-    }
-}
 
 /// A terminal running a shell on an SSH server.
 pub struct RemoteTerminal {
@@ -115,9 +32,11 @@ pub struct RemoteTerminal {
     label: SharedString,
     terminal: Entity<TerminalView>,
     state: Option<ConnectionState>,
-    dialog: Option<Dialog>,
+    prompts: Entity<SessionPrompts>,
+    /// Choosing a key to add to the server's `authorized_keys`.
+    key_picker: Option<(Entity<Picker>, Subscription)>,
     /// Asks the connection for work beside the shell; `None` if it never started.
-    shell: Option<ConnectionHandle>,
+    connection: Option<ConnectionHandle>,
     _subscriptions: Vec<Subscription>,
     _events: Option<Task<()>>,
 }
@@ -126,79 +45,38 @@ impl EventEmitter<TerminalViewEvent> for RemoteTerminal {}
 
 impl Focusable for RemoteTerminal {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.dialog.as_ref().map_or_else(
-            || self.terminal.focus_handle(cx),
-            |dialog| dialog.focus_handle(cx),
-        )
+        if let Some((picker, _)) = &self.key_picker {
+            return picker.focus_handle(cx);
+        }
+        let prompts = self.prompts.read(cx);
+        if prompts.is_open() {
+            prompts.focus_handle(cx)
+        } else {
+            self.terminal.focus_handle(cx)
+        }
     }
 }
 
 impl RemoteTerminal {
     /// Connects to `target` with `options` and shows its shell. Missing parts come from the
-    /// [`SshEnvironment`]: the local user name, port 22, the default key files.
+    /// [`SshEnvironment`](super::SshEnvironment): the local user name, port 22, the default key
+    /// files.
     pub fn new(
         target: &ConnectTarget,
         options: &ConnectOptions,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let env = cx.try_global::<SshEnvironment>().cloned();
-        let tokio = cx.try_global::<TokioHandle>().map(|t| t.handle().clone());
-        let user = target
-            .user
-            .clone()
-            .or_else(|| env.as_ref().and_then(|env| env.local_user.clone()));
-        let port = target.port.map_or(DEFAULT_PORT, ssherlock_core::Port::get);
-        let label = match &user {
-            Some(user) => format!("{user}@{}", host_label(target, port)),
-            None => host_label(target, port),
-        };
+        let prepared = prepare_connection(target, options, cx);
         let size = TerminalSize::default();
-
-        let (pty, shell, events, failure) = match (env, tokio, user) {
-            (Some(env), Some(tokio), Some(user)) => {
-                let connect = ConnectConfig::new(target.address.to_string(), user)
-                    .with_port(port)
-                    .with_algorithms(options.algorithms.clone())
-                    .with_compression(options.compression);
-                let key_files = env
-                    .ssh_dir
-                    .as_deref()
-                    .map(default_key_files)
-                    .unwrap_or_default();
-                let saved = open_saved(options, cx);
-                let mut config = RemoteShellConfig::new(
-                    connect,
-                    AuthMethod::with_saved(saved.key, saved.password, key_files),
-                );
-                config.passphrases = cx.try_global::<Passphrases>().map(|p| p.0.clone());
-                let host_keys = HostKeys::new(
-                    env.known_hosts,
-                    env.read_only_known_hosts,
-                    HostHashing::Hashed,
-                );
+        let (pty, connection, events, failure) = match prepared.setup {
+            Ok(setup) => {
                 let (tx, rx) = mpsc::channel(EVENT_CAPACITY);
-                let (pty, shell) = spawn_shell(config, host_keys, size, tx, &tokio);
-                (pty, Some(shell), Some(rx), None)
+                let (pty, connection) =
+                    spawn_shell(setup.config, setup.host_keys, size, tx, &setup.runtime);
+                (pty, Some(connection), Some(rx), None)
             }
-            (None, _, _) => (
-                finished_pty(),
-                None,
-                None,
-                Some("SSH is not set up: there is no data directory"),
-            ),
-            (_, None, _) => (
-                finished_pty(),
-                None,
-                None,
-                Some("the app's async runtime isn't running"),
-            ),
-            (_, _, None) => (
-                finished_pty(),
-                None,
-                None,
-                Some("no user name: connect as user@host"),
-            ),
+            Err(reason) => (finished_pty(), None, None, Some(reason)),
         };
 
         let terminal = cx.new(|cx| {
@@ -210,6 +88,18 @@ impl RemoteTerminal {
         let forward = cx.subscribe(&terminal, |_, _, event: &TerminalViewEvent, cx| {
             cx.emit(event.clone());
         });
+        let prompts = cx.new(SessionPrompts::new);
+        let closed = cx.subscribe_in(
+            &prompts,
+            window,
+            |view, _, event: &SessionPromptsEvent, window, cx| {
+                let SessionPromptsEvent::Closed { had_focus } = event;
+                if *had_focus {
+                    view.terminal.focus_handle(cx).focus(window);
+                }
+                cx.notify();
+            },
+        );
         let events = events.map(|mut rx| {
             cx.spawn_in(window, async move |this, cx| {
                 while let Some(event) = rx.recv().await {
@@ -228,12 +118,13 @@ impl RemoteTerminal {
             ))
         });
         Self {
-            label: label.into(),
+            label: prepared.label,
             terminal,
             state,
-            dialog: None,
-            shell,
-            _subscriptions: vec![forward],
+            prompts,
+            key_picker: None,
+            connection,
+            _subscriptions: vec![forward, closed],
             _events: events,
         }
     }
@@ -253,151 +144,37 @@ impl RemoteTerminal {
         self.state.as_ref()
     }
 
+    /// The tab's connection, for work beside the shell such as port forwards; `None` if it
+    /// never started.
+    pub fn connection(&self) -> Option<&ConnectionHandle> {
+        self.connection.as_ref()
+    }
+
     fn session_event(&mut self, event: SessionEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             SessionEvent::State(state) => self.state = Some(state),
-            SessionEvent::HostKey(prompt) => self.ask_host_key(prompt, window, cx),
-            SessionEvent::Prompt(prompt) => self.ask_login(prompt, window, cx),
             SessionEvent::Banner(banner) => {
                 // Shown by the server before login; the shell shows its own MOTD afterwards.
                 tracing::info!(host = %self.label, banner = banner.trim(), "server banner");
+            }
+            question @ (SessionEvent::HostKey(_) | SessionEvent::Prompt(_)) => {
+                let previous = self.focus_before_dialog(window, cx);
+                self.prompts.update(cx, |prompts, cx| {
+                    // Always a question, so nothing comes back.
+                    let _ = prompts.ask(question, window, cx);
+                });
+                if let Some(previous) = previous {
+                    previous.focus(window);
+                }
             }
         }
         cx.notify();
     }
 
-    fn ask_host_key(&mut self, prompt: HostKeyPrompt, window: &mut Window, cx: &mut Context<Self>) {
-        let text = host_key_text(prompt.host(), prompt.key(), prompt.concern());
-        let art = randomart(prompt.key());
-        let rows = text.rows.clone();
-        let previous_focus = self.focus_before_dialog(window, cx);
-        let modal = cx.new(|cx| {
-            let modal = Modal::new(text.title, text.message, text.confirm, window, cx)
-                .detail(move |window, cx| host_key_detail(&rows, &art, window, cx));
-            if text.is_danger {
-                modal.danger()
-            } else {
-                modal
-            }
-        });
-        let subscription =
-            cx.subscribe_in(&modal, window, |view, _, event: &ModalEvent, window, cx| {
-                if let Some(Dialog::HostKey { prompt, .. }) = &mut view.dialog
-                    && let Some(prompt) = prompt.take()
-                {
-                    let decision = match event {
-                        ModalEvent::Confirmed => HostKeyDecision::Trust,
-                        ModalEvent::Cancelled => HostKeyDecision::Reject,
-                    };
-                    prompt.answer(decision);
-                }
-                view.close_dialog(window, cx);
-            });
-        self.dialog = Some(Dialog::HostKey {
-            prompt: Some(prompt),
-            modal,
-            _subscription: subscription,
-        });
-        Self::restore_focus(previous_focus, window, cx);
-    }
-
-    fn ask_login(&mut self, prompt: AuthPrompt, window: &mut Window, cx: &mut Context<Self>) {
-        let (title, message, confirm) = login_text(prompt.kind());
-        let previous_focus = self.focus_before_dialog(window, cx);
-        let inputs: Vec<(Entity<TextInput>, bool)> = prompt
-            .fields()
-            .iter()
-            .map(|field| {
-                let is_secret = !field.echo;
-                let input = cx.new(|cx| {
-                    let input = TextInput::new("", InputKind::Persistent, window, cx);
-                    if is_secret { input.secret() } else { input }
-                });
-                (input, is_secret)
-            })
-            .collect();
-        let fields: Vec<(SharedString, Entity<TextInput>)> = prompt
-            .fields()
-            .iter()
-            .map(|field| SharedString::from(field.label.trim().to_owned()))
-            .zip(inputs.iter().map(|(input, _)| input.clone()))
-            .collect();
-        let modal = cx.new(|cx| {
-            Modal::new(title, message, confirm, window, cx)
-                .detail(move |_, cx| login_fields(&fields, cx))
-        });
-        // The modal took focus as it opened; typing belongs in the first field.
-        if let Some((first, _)) = inputs.first() {
-            first.focus_handle(cx).focus(window);
-        }
-
-        let mut subscriptions =
-            vec![
-                cx.subscribe_in(&modal, window, |view, _, event: &ModalEvent, window, cx| {
-                    match event {
-                        ModalEvent::Confirmed => view.submit_login(window, cx),
-                        ModalEvent::Cancelled => view.close_dialog(window, cx),
-                    }
-                }),
-            ];
-        for (index, (input, _)) in inputs.iter().enumerate() {
-            subscriptions.push(cx.subscribe_in(
-                input,
-                window,
-                move |view, _, event: &TextInputEvent, window, cx| match event {
-                    TextInputEvent::Changed(_) => {}
-                    TextInputEvent::Confirmed(_) => view.next_field_or_submit(index, window, cx),
-                    TextInputEvent::Cancelled => view.close_dialog(window, cx),
-                },
-            ));
-        }
-        self.dialog = Some(Dialog::Login {
-            prompt: Some(prompt),
-            modal,
-            inputs,
-            _subscriptions: subscriptions,
-        });
-        Self::restore_focus(previous_focus, window, cx);
-    }
-
-    fn next_field_or_submit(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let next = match &self.dialog {
-            Some(Dialog::Login { inputs, .. }) => {
-                inputs.get(index + 1).map(|(input, _)| input.clone())
-            }
-            _ => return,
-        };
-        match next {
-            Some(input) => input.focus_handle(cx).focus(window),
-            None => self.submit_login(window, cx),
-        }
-    }
-
-    fn submit_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(Dialog::Login { prompt, inputs, .. }) = &mut self.dialog
-            && let Some(prompt) = prompt.take()
-        {
-            let answers: Vec<SecretString> = inputs
-                .iter()
-                .map(|(input, is_secret)| {
-                    input.update(cx, |input, cx| {
-                        if *is_secret {
-                            input.take_secret(cx)
-                        } else {
-                            SecretString::from(input.text())
-                        }
-                    })
-                })
-                .collect();
-            prompt.answer(answers);
-        }
-        self.close_dialog(window, cx);
-    }
-
     /// Adds `key` to the server's `authorized_keys` over this tab's connection (KEY-07), once
     /// it's connected, and says how it went.
     pub fn install_key(&mut self, key: &Key, cx: &mut Context<Self>) {
-        let Some(shell) = self.shell.clone() else {
+        let Some(connection) = self.connection.clone() else {
             notify::info(format!("{} isn't connected", self.label), cx);
             return;
         };
@@ -405,7 +182,7 @@ impl RemoteTerminal {
         let key_title = key.title().to_owned();
         let host = self.label.clone();
         cx.spawn(async move |_, cx| {
-            let outcome = shell.install_public_key(&public_key).await;
+            let outcome = connection.install_public_key(&public_key).await;
             let _ = cx.update(|cx| match outcome {
                 Ok(KeyInstall::Added) => {
                     notify::info(format!("Added {key_title} to {host}'s authorized_keys"), cx);
@@ -454,28 +231,19 @@ impl RemoteTerminal {
                 {
                     view.install_key(key, cx);
                 }
-                view.close_dialog(window, cx);
+                view.close_key_picker(window, cx);
             },
         );
-        self.dialog = Some(Dialog::ChooseKey {
-            picker,
-            _subscription: subscription,
-        });
+        self.key_picker = Some((picker, subscription));
         cx.notify();
     }
 
-    /// Drops the dialog. A prompt still inside is dropped unanswered, which cancels it.
-    fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The fields sit inside the modal, so its handle covers them too.
-        let had_focus = self.dialog.as_ref().is_some_and(|dialog| match dialog {
-            Dialog::HostKey { modal, .. } | Dialog::Login { modal, .. } => {
-                modal.focus_handle(cx).contains_focused(window, cx)
-            }
-            Dialog::ChooseKey { picker, .. } => {
-                picker.focus_handle(cx).contains_focused(window, cx)
-            }
-        });
-        self.dialog = None;
+    fn close_key_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let had_focus = self
+            .key_picker
+            .as_ref()
+            .is_some_and(|(picker, _)| picker.focus_handle(cx).contains_focused(window, cx));
+        self.key_picker = None;
         if had_focus {
             self.terminal.focus_handle(cx).focus(window);
         }
@@ -490,22 +258,6 @@ impl RemoteTerminal {
             .focused(cx)
             .filter(|focused| *focused != ours && !ours.contains_focused(window, cx))
     }
-
-    fn restore_focus(previous: Option<FocusHandle>, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(previous) = previous {
-            previous.focus(window);
-        }
-        cx.notify();
-    }
-}
-
-/// `host` or `host:port` (IPv6 bracketed) for labels, leaving out the default port.
-fn host_label(target: &ConnectTarget, port: u16) -> String {
-    if port == DEFAULT_PORT {
-        target.address.to_string()
-    } else {
-        format!("{}:{port}", target.address.to_bracketed())
-    }
 }
 
 /// A pty whose program has already ended, for a terminal that couldn't connect at all.
@@ -517,101 +269,11 @@ fn finished_pty() -> PtyIo {
     io
 }
 
-fn host_key_detail(rows: &[KeyRow], art: &str, window: &mut Window, cx: &mut App) -> AnyElement {
-    let theme = cx.theme().clone();
-    let family = mono_family(&theme, window, cx);
-    div()
-        .flex()
-        .flex_col()
-        .gap(theme.spacing.md)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(theme.spacing.xs)
-                .children(rows.iter().map(|row| {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_size(theme.text.small_size)
-                                .text_color(theme.colors.text_muted)
-                                .child(row.label.clone()),
-                        )
-                        .child(
-                            div()
-                                .font_family(family.clone())
-                                .text_size(theme.text.small_size)
-                                .child(row.value.clone()),
-                        )
-                        .when_some(row.note.clone(), |d, note| {
-                            d.child(
-                                div()
-                                    .text_size(theme.text.small_size)
-                                    .text_color(theme.colors.text_muted)
-                                    .child(format!("Trusted in {note}")),
-                            )
-                        })
-                })),
-        )
-        .child(
-            div()
-                .flex()
-                .justify_center()
-                .p(theme.spacing.md)
-                .rounded(theme.radius.sm)
-                .bg(theme.terminal.background)
-                .text_color(theme.terminal.foreground)
-                .font_family(family)
-                .text_size(theme.text.small_size)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .children(art.lines().map(str::to_owned)),
-                ),
-        )
-        .into_any_element()
-}
-
-fn login_fields(fields: &[(SharedString, Entity<TextInput>)], cx: &mut App) -> AnyElement {
-    let theme = cx.theme().clone();
-    div()
-        .flex()
-        .flex_col()
-        .gap(theme.spacing.md)
-        .children(fields.iter().map(|(label, input)| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(theme.spacing.xs)
-                .when(!label.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .text_size(theme.text.small_size)
-                            .text_color(theme.colors.text_muted)
-                            .child(label.clone()),
-                    )
-                })
-                .child(
-                    div()
-                        .px(theme.spacing.sm)
-                        .py(theme.spacing.xs)
-                        .rounded(theme.radius.sm)
-                        .bg(theme.colors.background)
-                        .border(theme.metrics.border_width)
-                        .border_color(theme.colors.border)
-                        .child(input.clone()),
-                )
-        }))
-        .into_any_element()
-}
-
 impl Render for RemoteTerminal {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let status = self.state.as_ref().and_then(status::describe);
+        let has_prompt = self.prompts.read(cx).is_open();
         div()
             .key_context("RemoteTerminal")
             .on_action(cx.listener(Self::export_key_here))
@@ -624,6 +286,9 @@ impl Render for RemoteTerminal {
             .when_some(status, |d, (tone, text)| {
                 d.child(status::bar(tone, text, self.label.clone(), &theme))
             })
-            .when_some(self.dialog.as_ref(), |d, dialog| d.child(dialog.element()))
+            .when(has_prompt, |d| d.child(self.prompts.clone()))
+            .when_some(self.key_picker.as_ref(), |d, (picker, _)| {
+                d.child(picker.clone())
+            })
     }
 }

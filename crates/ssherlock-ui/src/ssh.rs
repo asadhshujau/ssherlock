@@ -6,19 +6,148 @@
 
 pub mod actions;
 pub mod dialogs;
+pub mod prompts;
 pub mod quick_connect;
 pub mod remote_terminal;
 pub mod status;
 
 use std::path::PathBuf;
 
-use gpui::{App, Global};
+use gpui::{App, Global, SharedString};
+pub use prompts::{SessionPrompts, SessionPromptsEvent};
 pub use quick_connect::{QuickConnectBar, QuickConnectEvent};
 pub use remote_terminal::RemoteTerminal;
 use ssherlock_core::keychain::{Key, KeyProtection};
-use ssherlock_core::{AlgorithmPreferences, Compression, Id, Sealed, SecretString};
-use ssherlock_ssh::{PassphraseCache, StoredKey};
+use ssherlock_core::{AlgorithmPreferences, Compression, ConnectTarget, Id, Sealed, SecretString};
+use ssherlock_ssh::auth::{AuthMethod, default_key_files};
+use ssherlock_ssh::known_hosts::HostHashing;
+use ssherlock_ssh::session::{ConnectConfig, DEFAULT_PORT};
+use ssherlock_ssh::{HostKeys, PassphraseCache, RemoteShellConfig, StoredKey};
 use ssherlock_store::{StoreError, Vault};
+
+use crate::hosts::HostsModel;
+use crate::notify;
+use crate::runtime::TokioHandle;
+
+/// Session events in flight to a view: a few state changes and at most one question at a time
+/// (the session waits for each answer), so a small buffer never fills in practice.
+pub const EVENT_CAPACITY: usize = 16;
+
+/// What starting a connection to a target needs, worked out the same way for a terminal tab and
+/// a forwarding-only connection.
+#[derive(Debug)]
+pub struct PreparedConnection {
+    /// `user@host[:port]`, for status bars and titles.
+    pub label: SharedString,
+    /// What to start the connection with, or why it can't start.
+    pub setup: Result<ConnectionSetup, &'static str>,
+}
+
+/// The parts of a connection that's ready to start.
+#[derive(Debug)]
+pub struct ConnectionSetup {
+    /// Where, as whom, how to log in, keep-alives and reconnects.
+    pub config: RemoteShellConfig,
+    /// The `known_hosts` files to check against.
+    pub host_keys: HostKeys,
+    /// The Tokio runtime to run it on.
+    pub runtime: tokio::runtime::Handle,
+}
+
+/// Prepares a connection to `target` with `options`. Missing parts come from the
+/// [`SshEnvironment`]: the local user name, port 22, the default key files. Saved credentials
+/// are opened from the vault here, so they're tried first.
+pub fn prepare_connection(
+    target: &ConnectTarget,
+    options: &ConnectOptions,
+    cx: &mut App,
+) -> PreparedConnection {
+    let env = cx.try_global::<SshEnvironment>().cloned();
+    let tokio = cx.try_global::<TokioHandle>().map(|t| t.handle().clone());
+    let user = target
+        .user
+        .clone()
+        .or_else(|| env.as_ref().and_then(|env| env.local_user.clone()));
+    let port = target.port.map_or(DEFAULT_PORT, ssherlock_core::Port::get);
+    let label = match &user {
+        Some(user) => format!("{user}@{}", host_label(target, port)),
+        None => host_label(target, port),
+    };
+    let setup = match (env, tokio, user) {
+        (Some(env), Some(runtime), Some(user)) => {
+            let connect = ConnectConfig::new(target.address.to_string(), user)
+                .with_port(port)
+                .with_algorithms(options.algorithms.clone())
+                .with_compression(options.compression);
+            let key_files = env
+                .ssh_dir
+                .as_deref()
+                .map(default_key_files)
+                .unwrap_or_default();
+            let saved = open_saved(options, cx);
+            let mut config = RemoteShellConfig::new(
+                connect,
+                AuthMethod::with_saved(saved.key, saved.password, key_files),
+            );
+            config.passphrases = cx.try_global::<Passphrases>().map(|p| p.0.clone());
+            let host_keys = HostKeys::new(
+                env.known_hosts,
+                env.read_only_known_hosts,
+                HostHashing::Hashed,
+            );
+            Ok(ConnectionSetup {
+                config,
+                host_keys,
+                runtime,
+            })
+        }
+        (None, _, _) => Err("SSH is not set up: there is no data directory"),
+        (_, None, _) => Err("the app's async runtime isn't running"),
+        (_, _, None) => Err("no user name: connect as user@host"),
+    };
+    PreparedConnection {
+        label: label.into(),
+        setup,
+    }
+}
+
+/// Opens the saved key and password `options` name, so the login can try them first. If they
+/// can't be opened, says why and logs in without them (the agent, key files and prompts still
+/// work).
+fn open_saved(options: &ConnectOptions, cx: &mut App) -> OpenedCredentials {
+    if options.credentials.is_empty() {
+        return OpenedCredentials::default();
+    }
+    let Some(model) = HostsModel::global(cx) else {
+        return OpenedCredentials::default();
+    };
+    let opened = {
+        let model = model.read(cx);
+        match model.vault() {
+            Some(vault) => options
+                .credentials
+                .open(model.keys(), vault)
+                .map_err(|error| error.to_string()),
+            None => Err(model
+                .vault_problem()
+                .map_or_else(String::new, |p| p.to_string())),
+        }
+    };
+    opened.unwrap_or_else(|reason| {
+        tracing::warn!(%reason, "logging in without the saved credentials");
+        notify::info(format!("Saved credentials weren't used: {reason}"), cx);
+        OpenedCredentials::default()
+    })
+}
+
+/// `host` or `host:port` (IPv6 bracketed) for labels, leaving out the default port.
+fn host_label(target: &ConnectTarget, port: u16) -> String {
+    if port == DEFAULT_PORT {
+        target.address.to_string()
+    } else {
+        format!("{}:{port}", target.address.to_bracketed())
+    }
+}
 
 /// Where SSH finds and keeps things on this machine. Set by `main` from the platform
 /// directories; tests point it at temporary ones. Without it, remote tabs explain they can't
