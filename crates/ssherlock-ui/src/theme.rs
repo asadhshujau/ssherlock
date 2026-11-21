@@ -261,6 +261,9 @@ pub struct Metrics {
     pub toast_width: Pixels,
     /// Width of the host and group editor.
     pub editor_width: Pixels,
+    /// Width of a small kind badge in a list row (a forwarding rule's Local / Remote / SOCKS),
+    /// so the names beside the badges line up.
+    pub badge_width: Pixels,
 }
 
 impl Theme {
@@ -485,6 +488,7 @@ impl Default for Metrics {
             card_width: px(210.),
             toast_width: px(360.),
             editor_width: px(640.),
+            badge_width: px(64.),
         }
     }
 }

@@ -103,6 +103,15 @@
     }
   },
   {
+    "context": "RuleEditor",
+    "bindings": {
+      "enter": "forwarding::SaveRuleEditor",
+      "secondary-enter": "forwarding::SaveRuleEditor",
+      "secondary-s": "forwarding::SaveRuleEditor",
+      "escape": "forwarding::CancelRuleEditor"
+    }
+  },
+  {
     "context": "KeyList",
     "bindings": {
       "down": "hosts::SelectNext",

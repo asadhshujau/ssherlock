@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{App, AppContext as _, Context, Entity, Global, SharedString, Task};
+use ssherlock_core::forwarding::ForwardRule;
 use ssherlock_core::hosts::{Group, Host};
 use ssherlock_core::keychain::{Identity, Key};
 use ssherlock_core::trash::TrashEntry;
@@ -56,6 +57,8 @@ struct Snapshot {
     trash: Vec<TrashEntry>,
     keys: Vec<Key>,
     identities: Vec<Identity>,
+    /// Every host's port-forwarding rules, oldest first.
+    forward_rules: Vec<ForwardRule>,
 }
 
 impl Snapshot {
@@ -68,6 +71,7 @@ impl Snapshot {
             trash,
             keys: store.list()?,
             identities: store.list()?,
+            forward_rules: store.list()?,
         })
     }
 }
@@ -268,6 +272,19 @@ impl HostsModel {
         &self.data.identities
     }
 
+    /// Every host's port-forwarding rules, oldest first.
+    pub fn forward_rules(&self) -> &[ForwardRule] {
+        &self.data.forward_rules
+    }
+
+    /// The port-forwarding rules of `host`, oldest first.
+    pub fn forward_rules_of(&self, host: Id<Host>) -> impl Iterator<Item = &ForwardRule> {
+        self.data
+            .forward_rules
+            .iter()
+            .filter(move |r| r.host == host)
+    }
+
     /// The host with `id`, if it's saved.
     pub fn host(&self, id: Id<Host>) -> Option<&Host> {
         self.data.hosts.iter().find(|h| h.id == id)
@@ -298,6 +315,35 @@ impl HostsModel {
     /// Saves `hosts` (new or edited), all or nothing.
     pub fn save_hosts(&mut self, hosts: Vec<Host>, cx: &mut Context<Self>) {
         self.run(move |store| store.upsert_all(&hosts), cx);
+    }
+
+    /// Saves a new or edited host and makes `rules` its port-forwarding rules, all or nothing
+    /// (HOST-11).
+    pub fn save_host_with_rules(
+        &mut self,
+        host: Host,
+        rules: Vec<ForwardRule>,
+        cx: &mut Context<Self>,
+    ) {
+        self.run(move |store| store.save_host_with_rules(&host, &rules), cx);
+    }
+
+    /// Saves copies of hosts, each with copies of its rules (HOST-08). Each host and its rules
+    /// are saved together.
+    pub fn save_copies(&mut self, copies: Vec<(Host, Vec<ForwardRule>)>, cx: &mut Context<Self>) {
+        self.run(
+            move |store| {
+                copies
+                    .iter()
+                    .try_for_each(|(host, rules)| store.save_host_with_rules(host, rules))
+            },
+            cx,
+        );
+    }
+
+    /// Saves one edited rule, as when it's enabled or disabled.
+    pub fn save_forward_rule(&mut self, rule: ForwardRule, cx: &mut Context<Self>) {
+        self.run(move |store| store.upsert(&rule), cx);
     }
 
     /// Saves a new or edited group.

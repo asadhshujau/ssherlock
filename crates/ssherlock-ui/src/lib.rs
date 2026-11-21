@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod components;
+pub mod forwarding;
 pub mod hosts;
 pub mod keychain;
 pub mod keymap;
@@ -36,6 +37,7 @@ pub fn init(tokio: tokio::runtime::Handle, cx: &mut App) {
     tabs::init(cx);
     ssh::init(cx);
     hosts::init(cx);
+    forwarding::init(cx);
     keychain::init(cx);
     // Last, so every feature's actions exist when their bindings are built.
     keymap::init(cx);
