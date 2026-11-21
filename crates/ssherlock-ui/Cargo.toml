@@ -23,7 +23,10 @@ zeroize = { workspace = true }
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 pretty_assertions = { workspace = true }
+# An in-process SSH server for the Port forwarding test.
+russh = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util"] }
 
 [lints]
 workspace = true

@@ -14,6 +14,7 @@ use super::actions::{
 };
 use super::list::{Step, TabList};
 use crate::components::{InputKind, Tab, TabBar, TextInput, TextInputEvent};
+use crate::forwarding::ForwardsModel;
 use crate::hosts::{ConnectRequest, HostList, HostListEvent, HostsModel};
 use crate::ssh::actions::QuickConnect;
 use crate::ssh::{ConnectOptions, QuickConnectBar, QuickConnectEvent, RemoteTerminal};
@@ -141,7 +142,7 @@ impl Pane {
     /// terminal tab.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let hosts = HostsModel::global(cx).map(|model| {
-            let list = cx.new(|cx| HostList::new(model, cx));
+            let list = cx.new(|cx| HostList::new(model, window, cx));
             let subscription = cx.subscribe_in(&list, window, Self::hosts_event);
             (list, subscription)
         });
@@ -218,8 +219,9 @@ impl Pane {
         }
     }
 
-    /// Opens a tab connected to a saved host, marked with its colour, and notes the connection
-    /// for Recents and the host's open sessions. Returns the tab's terminal.
+    /// Opens a tab connected to a saved host, marked with its colour, notes the connection for
+    /// Recents and the host's open sessions, and starts the host's rules that start on connect.
+    /// Returns the tab's terminal.
     pub fn open_saved_host(
         &mut self,
         request: &ConnectRequest,
@@ -231,6 +233,15 @@ impl Pane {
             model.update(cx, |model, cx| {
                 model.record_connection(request.host, cx);
                 model.session_opened(request.host, cx);
+            });
+        }
+        // Rules set to start on connect ride on the tab's own connection (FWD-05).
+        if let (Some(forwards), Some(connection)) = (
+            ForwardsModel::global(cx),
+            view.read(cx).connection().cloned(),
+        ) {
+            forwards.update(cx, |forwards, cx| {
+                forwards.start_auto(request.host, &connection, cx);
             });
         }
         view

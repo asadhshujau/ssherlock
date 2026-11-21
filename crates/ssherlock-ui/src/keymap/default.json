@@ -112,6 +112,19 @@
     }
   },
   {
+    "context": "PortAuthority",
+    "bindings": {
+      "down": "hosts::SelectNext",
+      "up": "hosts::SelectPrevious",
+      "home": "hosts::SelectFirst",
+      "end": "hosts::SelectLast",
+      "enter": "forwarding::ToggleForward",
+      "space": "forwarding::ToggleForward",
+      "e": "forwarding::EditRuleHost",
+      "shift-s": "forwarding::StopAllForwards"
+    }
+  },
+  {
     "context": "KeyList",
     "bindings": {
       "down": "hosts::SelectNext",

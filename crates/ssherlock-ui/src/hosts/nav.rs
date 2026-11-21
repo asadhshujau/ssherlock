@@ -13,6 +13,8 @@ pub enum Section {
     Hosts(Scope),
     /// Hosts with a tag.
     Tag(Tag),
+    /// Port-forwarding rules, to start and stop (Port forwarding).
+    Forwarding,
     /// Saved keys (the keychain).
     Keys,
     /// Identities (the keychain).
@@ -131,6 +133,8 @@ pub fn items(
         }));
     }
 
+    items.push(NavItem::Heading("Port forwarding"));
+    items.push(entry(Section::Forwarding, "Rules", counts.forward_rules));
     items.push(NavItem::Heading("Keychain"));
     items.push(entry(Section::Keys, "Keys", counts.keys));
     items.push(entry(Section::Identities, "Identities", counts.identities));
@@ -142,6 +146,8 @@ pub fn items(
 /// How many of the things outside the host list there are, for the navigation counts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counts {
+    /// Port-forwarding rules.
+    pub forward_rules: usize,
     /// Saved keys.
     pub keys: usize,
     /// Identities.
@@ -200,6 +206,7 @@ mod tests {
         let groups = vec![prod.clone(), db];
 
         let counts = Counts {
+            forward_rules: 4,
             keys: 3,
             identities: 1,
             trash: 2,
@@ -215,6 +222,8 @@ mod tests {
                 "> prod 2",
                 "[Tags]",
                 "#pg 1",
+                "[Port forwarding]",
+                "Rules 4",
                 "[Keychain]",
                 "Keys 3",
                 "Identities 1",
@@ -230,7 +239,7 @@ mod tests {
             labels(&open)[4..6],
             ["v prod 2".to_owned(), "  db 1".to_owned()]
         );
-        assert_eq!(open.iter().filter(|i| i.section().is_none()).count(), 4);
+        assert_eq!(open.iter().filter(|i| i.section().is_none()).count(), 5);
     }
 
     #[test]
@@ -242,6 +251,8 @@ mod tests {
                 "All hosts 0",
                 "Favourites 0",
                 "Recent 0",
+                "[Port forwarding]",
+                "Rules 0",
                 "[Keychain]",
                 "Keys 0",
                 "Identities 0",

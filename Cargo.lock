@@ -6667,6 +6667,7 @@ dependencies = [
  "anyhow",
  "gpui",
  "pretty_assertions",
+ "russh",
  "serde",
  "serde_json",
  "ssherlock-core",
