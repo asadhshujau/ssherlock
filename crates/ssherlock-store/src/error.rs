@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use ssherlock_core::forwarding::ForwardRuleError;
 use ssherlock_core::hosts::{GroupError, HostError};
 use ssherlock_core::keychain::{IdentityError, KeyError};
 
@@ -86,6 +87,15 @@ pub enum StoreError {
     /// An identity failed validation and wasn't saved.
     #[error("could not save the identity")]
     InvalidIdentity(#[from] IdentityError),
+    /// A port-forwarding rule failed validation and wasn't saved.
+    #[error("could not save the port forwarding rules")]
+    InvalidForwardRule(#[from] ForwardRuleError),
+    /// A port-forwarding rule was saved with a host it doesn't belong to (a bug in the caller).
+    #[error("the port forwarding rule {rule} belongs to another host")]
+    ForeignForwardRule {
+        /// The rule's id.
+        rule: String,
+    },
     /// The trash entry to restore doesn't exist (it was already restored or emptied).
     #[error("the trash entry {0} no longer exists")]
     TrashEntryGone(String),

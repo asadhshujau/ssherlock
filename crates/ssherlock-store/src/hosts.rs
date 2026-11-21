@@ -6,6 +6,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use ssherlock_core::forwarding::ForwardRule;
 use ssherlock_core::hosts::{Group, GroupTree, Host, Tag};
 use ssherlock_core::trash::{TrashContents, TrashEntry};
 use ssherlock_core::{Id, Timestamp};
@@ -263,7 +264,8 @@ impl Store {
         })
     }
 
-    /// Moves each host to the trash as its own entry, so each can be restored on its own.
+    /// Moves each host, with its port-forwarding rules, to the trash as its own entry, so each
+    /// can be restored on its own.
     /// All or nothing.
     ///
     /// # Errors
@@ -284,6 +286,7 @@ impl Store {
                     })?;
                     let entry = TrashEntry::new(
                         TrashContents {
+                            forward_rules: crate::forwarding::rules_of(tx, id)?,
                             hosts: vec![host],
                             ..TrashContents::default()
                         },
@@ -297,7 +300,8 @@ impl Store {
         })
     }
 
-    /// Moves `group`, every group inside it and all their hosts to the trash as one entry.
+    /// Moves `group`, every group inside it and all their hosts (with their port-forwarding
+    /// rules) to the trash as one entry.
     ///
     /// # Errors
     ///
@@ -322,14 +326,23 @@ impl Store {
                 .into_iter()
                 .filter(|h| h.group.is_some_and(|g| ids.contains(&g)))
                 .collect();
+            let mut forward_rules: Vec<ForwardRule> = Vec::new();
             for host in &hosts {
+                forward_rules.extend(crate::forwarding::rules_of(tx, host.id)?);
                 Host::delete(tx, host.id)?;
             }
             // Innermost first, so no row is left pointing at a deleted parent even briefly.
             for id in ids.iter().rev() {
                 Group::delete(tx, *id)?;
             }
-            let entry = TrashEntry::new(TrashContents { groups, hosts }, now);
+            let entry = TrashEntry::new(
+                TrashContents {
+                    groups,
+                    hosts,
+                    forward_rules,
+                },
+                now,
+            );
             TrashEntry::upsert(tx, &entry)?;
             Ok(entry.id)
         })

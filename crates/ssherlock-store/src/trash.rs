@@ -6,6 +6,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use ssherlock_core::Id;
+use ssherlock_core::forwarding::ForwardRule;
 use ssherlock_core::hosts::{Group, Host};
 use ssherlock_core::trash::{TrashContents, TrashEntry};
 
@@ -95,6 +96,9 @@ impl Store {
                 };
                 Host::upsert(tx, &Host { group, ..host })?;
             }
+            for rule in found.contents.forward_rules {
+                ForwardRule::upsert(tx, &rule)?;
+            }
             TrashEntry::delete(tx, entry)
         })
     }
@@ -117,14 +121,25 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use pretty_assertions::assert_eq;
-    use ssherlock_core::Timestamp;
+    use ssherlock_core::forwarding::{Forward, Listen};
     use ssherlock_core::hosts::Tag;
+    use ssherlock_core::{Port, Timestamp};
 
     use super::*;
     use crate::Repository;
 
     fn at(second: i64) -> Timestamp {
         Timestamp::from_second(second).unwrap()
+    }
+
+    fn proxy_rule(host: Id<Host>, port: u16) -> ForwardRule {
+        ForwardRule::new(
+            host,
+            Forward::Dynamic {
+                listen: Listen::localhost(Port::new(port).unwrap()),
+            },
+            at(1),
+        )
     }
 
     #[test]
@@ -135,13 +150,17 @@ mod tests {
         store.upsert(&h).unwrap();
         store.record_connection(h.id, at(7)).unwrap();
         let h: Host = store.get(h.id).unwrap().unwrap();
+        let rules = vec![proxy_rule(h.id, 1080), proxy_rule(h.id, 1081)];
+        store.upsert_all(&rules).unwrap();
 
         let [entry] = store.trash_hosts(&[h.id], at(9)).unwrap()[..] else {
             unreachable!("one host makes one entry")
         };
+        assert_eq!(store.forward_rules_of(h.id).unwrap(), Vec::new());
         store.restore(entry).unwrap();
 
-        assert_eq!(store.get(h.id).unwrap(), Some(h));
+        assert_eq!(store.get(h.id).unwrap(), Some(h.clone()));
+        assert_eq!(store.forward_rules_of(h.id).unwrap(), rules);
         assert_eq!(Repository::<TrashEntry>::list(&store).unwrap(), Vec::new());
         assert!(matches!(
             store.restore(entry),
@@ -158,9 +177,13 @@ mod tests {
         let mut h = Host::new("db1".parse().unwrap(), at(1));
         h.group = Some(db.id);
         store.upsert(&h).unwrap();
+        let rule = proxy_rule(h.id, 1080);
+        store.upsert(&rule).unwrap();
 
         let entry = store.trash_group(prod.id, at(9)).unwrap();
+        assert_eq!(Repository::<ForwardRule>::list(&store).unwrap(), Vec::new());
         store.restore(entry).unwrap();
+        assert_eq!(store.forward_rules_of(h.id).unwrap(), vec![rule]);
 
         assert_eq!(store.get(prod.id).unwrap(), Some(prod));
         assert_eq!(store.get(db.id).unwrap(), Some(db));

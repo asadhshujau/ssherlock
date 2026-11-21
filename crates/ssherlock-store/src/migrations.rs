@@ -35,6 +35,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "keychain",
         sql: include_str!("../migrations/0003_keychain.sql"),
     },
+    Migration {
+        version: 4,
+        name: "forwarding",
+        sql: include_str!("../migrations/0004_forwarding.sql"),
+    },
 ];
 
 /// The newest schema version this build knows.
@@ -151,6 +156,7 @@ mod tests {
         assert_eq!(
             tables(&conn),
             [
+                "forward_rules",
                 "groups",
                 "host_tags",
                 "hosts",
