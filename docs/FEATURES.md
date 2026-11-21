@@ -58,7 +58,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [x] **HOST-08** Duplicate host, bulk edit, bulk move to group (Free)
 - [x] **HOST-09** Trash with restore and permanent delete (Pro)
 - [ ] **HOST-10** Per-host terminal overrides: theme, font, charset, cursor (Pro)
-- [ ] **HOST-11** Per-host saved port-forwarding rules (see FWD) (Pro)
+- [x] **HOST-11** Per-host saved port-forwarding rules (see FWD) (Pro)
 - [~] **HOST-12** Host "Case File" detail panel: notes, last connected, key fingerprint, open sessions (Free)
   _Left: the host's key fingerprint from `known_hosts`, with the keychain's key views (KEY-13, Phase 4)._
 - [x] **HOST-13** Multi-select → connect to all (Free)
@@ -121,14 +121,14 @@ documented in a doc comment, no secrets logged, box ticked here.
 
 ## 5. Port forwarding (FWD)
 
-- [ ] **FWD-01** Local forwarding (`-L`) (Free)
-- [ ] **FWD-02** Remote forwarding (`-R`) (Free)
-- [ ] **FWD-03** Dynamic SOCKS5 proxy (`-D`) (Free)
-- [ ] **FWD-04** Saved rules per host, named, enable/disable (Pro)
-- [ ] **FWD-05** Auto-start rules on connect (Pro)
-- [ ] **FWD-06** Forwarding-only sessions (no terminal) (Free)
-- [ ] **FWD-07** Status, byte counters, active connections, restart on reconnect (Free)
-- [ ] **FWD-08** Bind address options (localhost / all interfaces) (Free)
+- [x] **FWD-01** Local forwarding (`-L`) (Free)
+- [x] **FWD-02** Remote forwarding (`-R`) (Free)
+- [x] **FWD-03** Dynamic SOCKS5 proxy (`-D`) (Free)
+- [x] **FWD-04** Saved rules per host, named, enable/disable (Pro)
+- [x] **FWD-05** Auto-start rules on connect (Pro)
+- [x] **FWD-06** Forwarding-only sessions (no terminal) (Free)
+- [x] **FWD-07** Status, byte counters, active connections, restart on reconnect (Free)
+- [x] **FWD-08** Bind address options (localhost / all interfaces) (Free)
 - [ ] **FWD-09** Open forwarded port in browser button (+)
 
 ## 6. Snippets (SNIP)
@@ -227,7 +227,7 @@ documented in a doc comment, no secrets logged, box ticked here.
 - [ ] **APP-14** Onboarding / first-run: import existing config, create first host (Free)
 - [ ] **APP-15** In-app changelog and "what's new" (Free)
 - [~] **APP-16** Dashboard home: recent hosts, active forwards, transfers (Free)
-  _Left: active forwards (Phase 5) and transfers (Phase 7). Recent hosts ship on the hosts page._
+  _Left: transfers (Phase 7). Recent hosts and active forwards (Port forwarding → Rules) ship on the hosts page._
 
 ---
 

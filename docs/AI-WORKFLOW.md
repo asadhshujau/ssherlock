@@ -131,6 +131,19 @@ only what you truly can't do yourself, with steps to do it.
   browser. Also unset `SSH_AUTH_SOCK` and `SSH_AGENT_PID`, or the app can use the maintainer's
   real SSH agent when it logs in to a test server.
 - Wait for the window with `xdotool search --sync`, not a fixed sleep.
+- **On macOS** (since Phase 5) the app runs on the real display, so:
+  - Don't launch the real binary for a visual check. It puts a vault key in the maintainer's
+    login Keychain, even with a sandboxed `HOME`. Instead, build a throwaway harness crate in
+    the scratchpad. It depends on the workspace crates by path, installs `HostsModel` over
+    `Store::open_in_memory()` (the vault key stays in memory), opens the view under test at
+    known window bounds, and can run an in-process russh server to connect to. Build it with
+    `CARGO_TARGET_DIR` set to the repo's `target`, so it reuses the build.
+  - Capture only the window's region (`screencapture -x -R x,y,w,h`), never the whole screen.
+    Check the harness window is frontmost first, and delete any capture that shows the
+    maintainer's own windows without looking at it again.
+  - Never post synthetic input (CGEvent, `osascript` keystrokes). It triggers a prompt asking
+    to let VS Code control the Mac. Drive views from the harness's code instead. For a long
+    form, draw it in a taller container shifted up, so the part under test is in view.
 
 ## Shell gotchas
 
