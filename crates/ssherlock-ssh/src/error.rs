@@ -1,5 +1,6 @@
 //! The crate's error type.
 
+use std::error::Error as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -184,6 +185,59 @@ pub enum SshError {
     /// A channel closed before it was ready.
     #[error("the server closed the channel")]
     ChannelClosed,
+
+    /// A forwarded port couldn't be opened on this machine (in use, or not allowed).
+    #[error("could not listen on {address}")]
+    Listen {
+        /// The address and port, e.g. `127.0.0.1:8080`.
+        address: String,
+        /// Why.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The server refused to listen on a port for a remote forward.
+    #[error("the server refused to listen on port {port}")]
+    RemoteListenRefused {
+        /// The port asked for.
+        port: u16,
+    },
+
+    /// The server wouldn't open a forwarded connection to a destination.
+    #[error("the server could not open a connection to {destination}: {reason}")]
+    ForwardRefused {
+        /// The destination, `host:port`.
+        destination: String,
+        /// Why, in the server's terms.
+        reason: String,
+    },
+
+    /// A forwarded connection couldn't reach its destination from this machine.
+    #[error("could not connect to {destination}")]
+    ForwardConnect {
+        /// The destination, `host:port`.
+        destination: String,
+        /// Why.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A program using the SOCKS proxy sent something the proxy can't serve.
+    #[error("refused a SOCKS request: {reason}")]
+    SocksRequest {
+        /// What was wrong with it.
+        reason: &'static str,
+    },
+
+    /// Reading or writing a forwarded connection failed.
+    #[error("could not {what}")]
+    ForwardIo {
+        /// What was being done.
+        what: &'static str,
+        /// Why.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl SshError {
@@ -198,4 +252,16 @@ impl SshError {
                 | Self::ChannelClosed
         )
     }
+}
+
+/// An error and its causes as one line, for the user: `could not connect to h:22: refused`.
+pub(crate) fn describe(error: &SshError) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }

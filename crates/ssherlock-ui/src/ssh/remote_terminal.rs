@@ -16,7 +16,7 @@ use ssherlock_ssh::auth::{AuthMethod, AuthPrompt, default_key_files};
 use ssherlock_ssh::known_hosts::{HostHashing, randomart};
 use ssherlock_ssh::session::{ConnectConfig, DEFAULT_PORT, HostKeyDecision, HostKeyPrompt};
 use ssherlock_ssh::{
-    ConnectionState, HostKeys, KeyInstall, RemoteShellConfig, SessionEvent, ShellHandle,
+    ConnectionHandle, ConnectionState, HostKeys, KeyInstall, RemoteShellConfig, SessionEvent,
     spawn_shell,
 };
 use ssherlock_terminal::{PtyExit, PtyIo, PtyOutput, TerminalSize};
@@ -117,7 +117,7 @@ pub struct RemoteTerminal {
     state: Option<ConnectionState>,
     dialog: Option<Dialog>,
     /// Asks the connection for work beside the shell; `None` if it never started.
-    shell: Option<ShellHandle>,
+    shell: Option<ConnectionHandle>,
     _subscriptions: Vec<Subscription>,
     _events: Option<Task<()>>,
 }
