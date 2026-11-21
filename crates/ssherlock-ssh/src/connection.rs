@@ -1,23 +1,31 @@
-//! A remote shell that survives network drops: connect, log in, open a shell, watch the
+//! A connection that survives network drops: connect, log in, open a shell (or not), watch the
 //! connection with keep-alives, and reconnect with backoff when it dies.
 //!
 //! **Service** layer. [`spawn_shell`] returns a [`PtyIo`] at once and does everything else in a
-//! background task, reporting progress as [`SessionEvent::State`]. Its [`ShellHandle`] asks
-//! that task for work on the same connection, such as adding a key to `authorized_keys`. The terminal keeps the same
+//! background task, reporting progress as [`SessionEvent::State`]. The terminal keeps the same
 //! `PtyIo` across reconnects; each reconnect opens a fresh shell into it. The task ends, closing
 //! the connection, when the shell exits, the connection can't be restored, or the `PtyIo` is
-//! dropped (the tab closed).
+//! dropped (the tab closed). [`spawn_forwarding`] is the same without a shell, for a
+//! forwarding-only connection (FWD-06), and ends when its handle is dropped.
+//!
+//! Both return a [`ConnectionHandle`] that asks the task for work on the same connection:
+//! adding a key to `authorized_keys`, or starting port forwards, which follow the connection
+//! through reconnects.
 
-use std::error::Error as _;
+use std::sync::Arc;
 use std::time::Duration;
 
+use ssherlock_core::forwarding::Forward;
 use ssherlock_terminal::{PtyExit, PtyIo, PtyOutput, PtyPeer, TerminalSize};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::SshError;
 use crate::auth::{AuthMethod, PassphraseCache};
 use crate::authorized_keys::KeyInstall;
+use crate::error::describe;
+use crate::forwarding::{self, RunningForward, Sessions};
 use crate::host_keys::HostKeys;
 use crate::session::{ConnectConfig, Session, SessionEvent};
 use crate::shell::{OpenShell, ShellEnd, bridge};
@@ -153,23 +161,31 @@ pub enum DisconnectReason {
 /// buffer is plenty; a full one makes the sender wait.
 const REQUEST_CAPACITY: usize = 4;
 
-/// Asks a running [`spawn_shell`] connection for work on the server beside the shell. Requests
-/// wait while it's connecting or reconnecting and run once it's connected; they fail with
-/// [`SshError::NotConnected`] if the connection ends first.
+/// Asks a running connection ([`spawn_shell`] or [`spawn_forwarding`]) for work on the server:
+/// adding a key to `authorized_keys`, or port forwards. Key requests wait while it's connecting
+/// or reconnecting and run once it's connected; they fail with [`SshError::NotConnected`] if
+/// the connection ends first.
+///
+/// For a forwarding-only connection the handle is what keeps it open: once every clone is
+/// dropped, it disconnects.
 #[derive(Clone, Debug)]
-pub struct ShellHandle {
-    requests: mpsc::Sender<ShellRequest>,
+pub struct ConnectionHandle {
+    requests: mpsc::Sender<Request>,
+    sessions: Sessions,
+    runtime: tokio::runtime::Handle,
+    /// Set for a forwarding-only connection; dropping the last clone ends it.
+    _keep_open: Option<Arc<DropGuard>>,
 }
 
 #[derive(Debug)]
-enum ShellRequest {
+enum Request {
     InstallKey {
         public_line: String,
         reply: oneshot::Sender<Result<KeyInstall, SshError>>,
     },
 }
 
-impl ShellHandle {
+impl ConnectionHandle {
     /// Adds `public_line` to the logged-in user's `authorized_keys` over this connection (see
     /// [`Session::install_public_key`]).
     ///
@@ -180,13 +196,21 @@ impl ShellHandle {
     pub async fn install_public_key(&self, public_line: &str) -> Result<KeyInstall, SshError> {
         let (reply, answer) = oneshot::channel();
         self.requests
-            .send(ShellRequest::InstallKey {
+            .send(Request::InstallKey {
                 public_line: public_line.to_owned(),
                 reply,
             })
             .await
             .map_err(|_| SshError::NotConnected)?;
         answer.await.map_err(|_| SshError::NotConnected)?
+    }
+
+    /// Starts `forward` over this connection (FWD-01…03). It starts at once, waits out
+    /// reconnects, and is restarted on each new session (FWD-07). It stops when the returned
+    /// [`RunningForward`] is dropped or the connection finishes. A forward doesn't keep a
+    /// forwarding-only connection open; this handle does.
+    pub fn start_forward(&self, forward: Forward) -> RunningForward {
+        forwarding::start(forward, self.sessions.clone(), &self.runtime)
     }
 }
 
@@ -202,29 +226,92 @@ pub fn spawn_shell(
     size: TerminalSize,
     events: mpsc::Sender<SessionEvent>,
     runtime: &tokio::runtime::Handle,
-) -> (PtyIo, ShellHandle) {
+) -> (PtyIo, ConnectionHandle) {
     let (io, peer) = PtyIo::pair();
-    let (requests, receiver) = mpsc::channel(REQUEST_CAPACITY);
     let span = tracing::info_span!("remote_shell", host = %config.connect.host(), port = config.connect.port());
+    let front = Front::Shell { peer, size };
+    let handle = spawn(config, host_keys, front, None, events, runtime, span);
+    (io, handle)
+}
+
+/// Starts a connection without a shell, for port forwarding only (FWD-06), and returns the
+/// handle that starts forwards over it. It connects, logs in and reconnects exactly as
+/// [`spawn_shell`] does, and disconnects once every clone of the handle is dropped.
+pub fn spawn_forwarding(
+    config: RemoteShellConfig,
+    host_keys: HostKeys,
+    events: mpsc::Sender<SessionEvent>,
+    runtime: &tokio::runtime::Handle,
+) -> ConnectionHandle {
+    let closed = CancellationToken::new();
+    let span = tracing::info_span!("forwarding", host = %config.connect.host(), port = config.connect.port());
+    let front = Front::Headless {
+        closed: closed.clone(),
+    };
+    let keep_open = Some(Arc::new(closed.drop_guard()));
+    spawn(config, host_keys, front, keep_open, events, runtime, span)
+}
+
+fn spawn(
+    config: RemoteShellConfig,
+    host_keys: HostKeys,
+    front: Front,
+    keep_open: Option<Arc<DropGuard>>,
+    events: mpsc::Sender<SessionEvent>,
+    runtime: &tokio::runtime::Handle,
+    span: tracing::Span,
+) -> ConnectionHandle {
+    let (requests, receiver) = mpsc::channel(REQUEST_CAPACITY);
+    let (sessions_tx, sessions) = watch::channel(None);
     let supervisor = Supervisor {
         config,
         host_keys,
-        size,
+        front,
         events,
-        peer,
         requests: receiver,
+        sessions: sessions_tx,
     };
     runtime.spawn(tracing::Instrument::instrument(supervisor.run(), span));
-    (io, ShellHandle { requests })
+    ConnectionHandle {
+        requests,
+        sessions,
+        runtime: runtime.clone(),
+        _keep_open: keep_open,
+    }
+}
+
+/// What a connection serves: a terminal's shell, or nothing but forwards and requests.
+enum Front {
+    /// A shell in a terminal; the connection ends when the terminal closes.
+    Shell {
+        peer: PtyPeer,
+        /// Follows the terminal's resizes, so a reconnect opens the next shell at the right
+        /// size.
+        size: TerminalSize,
+    },
+    /// No shell; the connection ends when `closed` is cancelled (its last handle dropped).
+    Headless { closed: CancellationToken },
+}
+
+impl Front {
+    /// Resolves once whoever the connection serves has gone away.
+    async fn closed(&self) {
+        match self {
+            Self::Shell { peer, .. } => peer.output.closed().await,
+            Self::Headless { closed } => closed.cancelled().await,
+        }
+    }
 }
 
 struct Supervisor {
     config: RemoteShellConfig,
     host_keys: HostKeys,
-    size: TerminalSize,
+    front: Front,
     events: mpsc::Sender<SessionEvent>,
-    peer: PtyPeer,
-    requests: mpsc::Receiver<ShellRequest>,
+    requests: mpsc::Receiver<Request>,
+    /// The session forwards use: set while connected, `None` otherwise. Dropped when the
+    /// supervisor ends, which ends the forwards too.
+    sessions: watch::Sender<Option<Arc<Session>>>,
 }
 
 /// What ended one connected stretch.
@@ -241,7 +328,7 @@ impl Supervisor {
             self.state(ConnectionState::Connecting { attempt }).await;
             let established = tokio::select! {
                 result = self.establish() => result,
-                () = self.peer.output.closed() => break DisconnectReason::Closed,
+                () = self.front.closed() => break DisconnectReason::Closed,
             };
             match established {
                 Ok((session, shell)) => {
@@ -250,7 +337,11 @@ impl Supervisor {
                     }
                     has_connected = true;
                     attempt = 0;
-                    match self.connected(&session, shell).await {
+                    let session = Arc::new(session);
+                    self.sessions.send_replace(Some(Arc::clone(&session)));
+                    let stretch = self.connected(&session, shell).await;
+                    self.sessions.send_replace(None);
+                    match stretch {
                         Stretch::Finished(reason) => {
                             disconnect(&session).await;
                             break reason;
@@ -276,20 +367,22 @@ impl Supervisor {
                 break DisconnectReason::Closed;
             }
         };
-        tracing::info!(?reason, "remote shell finished");
-        if reason != DisconnectReason::Closed {
+        tracing::info!(?reason, "connection finished");
+        if let Front::Shell { peer, .. } = &self.front
+            && reason != DisconnectReason::Closed
+        {
             let exit = match &reason {
                 DisconnectReason::ShellExited(exit) => exit.clone(),
                 _ => PtyExit::Unknown,
             };
             // The terminal may already be gone; then there's nobody to tell.
-            let _ = self.peer.output.send(PtyOutput::Exited(exit)).await;
+            let _ = peer.output.send(PtyOutput::Exited(exit)).await;
         }
         self.state(ConnectionState::Disconnected(reason)).await;
     }
 
-    /// Connects, logs in and opens a shell.
-    async fn establish(&self) -> Result<(Session, OpenShell), SshError> {
+    /// Connects, logs in and, for a terminal, opens a shell.
+    async fn establish(&self) -> Result<(Session, Option<OpenShell>), SshError> {
         let mut session = Session::connect(
             self.config.connect.clone(),
             self.host_keys.clone(),
@@ -301,29 +394,47 @@ impl Supervisor {
             session.use_passphrase_cache(cache.clone());
         }
         session.authenticate(&self.config.methods).await?;
-        let shell = session.open_shell_channel(self.size).await?;
+        let shell = match &self.front {
+            Front::Shell { size, .. } => Some(session.open_shell_channel(*size).await?),
+            Front::Headless { .. } => None,
+        };
         Ok((session, shell))
     }
 
-    /// Runs the shell until it ends, the terminal closes, or keep-alives say the connection died.
-    async fn connected(&mut self, session: &Session, shell: OpenShell) -> Stretch {
+    /// Runs until the shell ends (or, without one, the last handle goes), the terminal closes,
+    /// or keep-alives say the connection died. Requests are handled meanwhile.
+    async fn connected(&mut self, session: &Session, shell: Option<OpenShell>) -> Stretch {
         self.state(ConnectionState::Connected { latency: None })
             .await;
+        let Self {
+            front,
+            config,
+            events,
+            requests,
+            ..
+        } = self;
         let end = {
-            let Self {
-                peer,
-                size,
-                config,
-                events,
-                requests,
-                ..
-            } = self;
-            let bridge = bridge(shell, peer, size);
+            let served = async {
+                match (front, shell) {
+                    (Front::Shell { peer, size }, Some(shell)) => {
+                        Some(bridge(shell, peer, size).await)
+                    }
+                    (Front::Shell { .. }, None) => {
+                        // `establish` always opens a shell for a terminal.
+                        tracing::warn!("connected without a shell for a terminal");
+                        Some(ShellEnd::TerminalClosed)
+                    }
+                    (Front::Headless { closed }, _) => {
+                        closed.cancelled().await;
+                        Some(ShellEnd::TerminalClosed)
+                    }
+                }
+            };
             let heartbeat = heartbeat(session, config.keep_alive, events);
-            tokio::pin!(bridge, heartbeat);
+            tokio::pin!(served, heartbeat);
             loop {
                 tokio::select! {
-                    end = &mut bridge => break Some(end),
+                    end = &mut served => break end,
                     () = &mut heartbeat => break None,
                     // Handled in turn: the shell's output waits the moment a request takes.
                     Some(request) = requests.recv() => handle(session, request).await,
@@ -344,31 +455,40 @@ impl Supervisor {
         }
     }
 
-    /// Waits `delay` before a reconnect, tracking resizes. Typing while disconnected is dropped:
-    /// replaying it into a fresh shell could run half-typed commands. Returns `false` if the
-    /// terminal closed meanwhile.
+    /// Waits `delay` before a reconnect. A terminal's resizes are tracked; its typing is
+    /// dropped, since replaying it into a fresh shell could run half-typed commands. Returns
+    /// `false` if whoever the connection serves went away meanwhile.
     async fn wait(&mut self, delay: Duration) -> bool {
         let deadline = Instant::now() + delay;
-        loop {
-            tokio::select! {
-                () = tokio::time::sleep_until(deadline) => return true,
-                command = self.peer.input.recv() => match command {
-                    Some(ssherlock_terminal::PtyInput::Resize(size)) => self.size = size,
-                    Some(ssherlock_terminal::PtyInput::Write(_)) => {}
-                    None => return false,
-                },
-            }
+        match &mut self.front {
+            Front::Shell { peer, size } => loop {
+                tokio::select! {
+                    () = tokio::time::sleep_until(deadline) => return true,
+                    command = peer.input.recv() => match command {
+                        Some(ssherlock_terminal::PtyInput::Resize(new_size)) => *size = new_size,
+                        Some(ssherlock_terminal::PtyInput::Write(_)) => {}
+                        None => return false,
+                    },
+                }
+            },
+            Front::Headless { closed } => tokio::select! {
+                () = tokio::time::sleep_until(deadline) => true,
+                () = closed.cancelled() => false,
+            },
         }
     }
 
-    /// Writes a dim line into the terminal so the new shell's output doesn't run on from the
-    /// old prompt. Returns `false` if the terminal is gone.
+    /// Writes a dim line into a terminal so the new shell's output doesn't run on from the old
+    /// prompt. Returns `false` if the terminal is gone.
     async fn mark_reconnected(&self) -> bool {
-        self.peer
-            .output
-            .send(PtyOutput::Data(RECONNECTED_NOTICE.to_vec()))
-            .await
-            .is_ok()
+        match &self.front {
+            Front::Shell { peer, .. } => peer
+                .output
+                .send(PtyOutput::Data(RECONNECTED_NOTICE.to_vec()))
+                .await
+                .is_ok(),
+            Front::Headless { .. } => true,
+        }
     }
 
     async fn state(&self, state: ConnectionState) {
@@ -380,9 +500,9 @@ impl Supervisor {
 }
 
 /// Does what `request` asks over `session` and sends back the outcome.
-async fn handle(session: &Session, request: ShellRequest) {
+async fn handle(session: &Session, request: Request) {
     match request {
-        ShellRequest::InstallKey { public_line, reply } => {
+        Request::InstallKey { public_line, reply } => {
             let outcome = session.install_public_key(&public_line).await;
             if reply.send(outcome).is_err() {
                 // The asker gave up (its tab closed); the key was still added.
@@ -431,18 +551,6 @@ async fn disconnect(session: &Session) {
         // Already gone, which is what we wanted.
         tracing::debug!(error = %e, "connection was already closed");
     }
-}
-
-/// An error and its causes as one line, for the user: `could not connect to h:22: refused`.
-fn describe(error: &SshError) -> String {
-    let mut text = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        text.push_str(": ");
-        text.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    text
 }
 
 #[cfg(test)]

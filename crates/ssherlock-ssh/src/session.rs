@@ -18,6 +18,7 @@ use crate::SshError;
 use crate::algorithms::{AlgorithmPreferences, Compression};
 use crate::auth::{AuthMethod, AuthPrompt, Authenticator, PassphraseCache};
 use crate::connection::ConnectionState;
+use crate::forwarding::Routes;
 use crate::host_keys::HostKeys;
 use crate::known_hosts::{HostKeyStatus, KnownHostName, KnownKey};
 
@@ -204,6 +205,8 @@ pub struct Session {
     config: ConnectConfig,
     events: mpsc::Sender<SessionEvent>,
     passphrases: Option<PassphraseCache>,
+    /// Where connections arriving on remote forwards' ports go; shared with the handler.
+    routes: Arc<Routes>,
 }
 
 impl std::fmt::Debug for Session {
@@ -230,13 +233,15 @@ impl Session {
     ) -> Result<Self, SshError> {
         let span = tracing::info_span!("ssh", host = %config.host, port = config.port);
         async move {
-            let handle = handshake(&config, host_keys, events.clone()).await?;
+            let routes = Arc::new(Routes::default());
+            let handle = handshake(&config, host_keys, events.clone(), Arc::clone(&routes)).await?;
             tracing::info!("connected");
             Ok(Self {
                 handle,
                 config,
                 events,
                 passphrases: None,
+                routes,
             })
         }
         .instrument(span)
@@ -294,6 +299,10 @@ impl Session {
         &self.handle
     }
 
+    pub(crate) fn routes(&self) -> &Routes {
+        &self.routes
+    }
+
     /// What this session connected to.
     pub fn config(&self) -> &ConnectConfig {
         &self.config
@@ -321,6 +330,7 @@ async fn handshake(
     config: &ConnectConfig,
     host_keys: HostKeys,
     events: mpsc::Sender<SessionEvent>,
+    routes: Arc<Routes>,
 ) -> Result<client::Handle<ClientHandler>, SshError> {
     let timed_out = || SshError::ConnectTimeout {
         host: config.host.clone(),
@@ -355,6 +365,7 @@ async fn handshake(
         host_keys,
         events,
         host_key_reached: Arc::clone(&host_key_reached),
+        routes,
     };
     let russh_config = Arc::new(client::Config {
         nodelay: true,
@@ -382,6 +393,7 @@ pub(crate) struct ClientHandler {
     host_keys: HostKeys,
     events: mpsc::Sender<SessionEvent>,
     host_key_reached: Arc<Notify>,
+    routes: Arc<Routes>,
 }
 
 impl client::Handler for ClientHandler {
@@ -419,6 +431,29 @@ impl client::Handler for ClientHandler {
             tracing::warn!("dropped the server banner: the session's listener is gone");
         }
         Ok(())
+    }
+
+    /// A connection arrived on a remote forward's port. It's handed to the forward, which
+    /// accepts or refuses it once it knows whether its destination answers; nothing here waits,
+    /// so the session carries on meanwhile.
+    #[allow(clippy::too_many_arguments, reason = "russh's callback signature")]
+    fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> impl Future<Output = Result<(), SshError>> + Send {
+        self.routes.route(
+            connected_port,
+            channel,
+            reply,
+            format!("{originator_address}:{originator_port}"),
+        );
+        std::future::ready(Ok(()))
     }
 }
 

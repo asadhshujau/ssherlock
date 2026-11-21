@@ -194,7 +194,7 @@ Features: KEY-01…07, 11, 13, 14, SEC-01, SEC-11.
 
 Work:
 
-- `ssherlock-ssh::forward`: `LocalForward`, `RemoteForward`, `DynamicForward` (SOCKS5 server) — one trait `Forward` with `start / stop / stats`.
+- `ssherlock-ssh::forwarding`: local, remote and dynamic (SOCKS5 server) forwards. `Forward` is an enum in `ssherlock-core`; `ConnectionHandle::start_forward` returns a `RunningForward` with status and stats that stops when dropped (ADR 0009).
 - Model `ForwardRule` saved per host, auto-start flag.
 - Forwarding-only sessions (no terminal).
 - UI: rules editor in host form, "Port Authority" panel listing active forwards with byte counters and restart on reconnect.
