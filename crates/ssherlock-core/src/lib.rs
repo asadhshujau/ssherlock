@@ -11,6 +11,7 @@
 pub mod address;
 pub mod algorithms;
 pub mod app;
+pub mod forwarding;
 pub mod fuzzy;
 pub mod hosts;
 pub mod id;

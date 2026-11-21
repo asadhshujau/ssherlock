@@ -7,6 +7,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::forwarding::ForwardRule;
 use crate::hosts::{Group, Host};
 use crate::id::Id;
 
@@ -30,6 +31,8 @@ pub struct TrashContents {
     pub groups: Vec<Group>,
     /// Hosts.
     pub hosts: Vec<Host>,
+    /// The hosts' port-forwarding rules, which go and come back with them.
+    pub forward_rules: Vec<ForwardRule>,
 }
 
 impl TrashEntry {
@@ -77,7 +80,15 @@ mod tests {
         };
         let group = Group::new("Prod", None, now);
         let entry = |groups: Vec<Group>, hosts: Vec<Host>| {
-            TrashEntry::new(TrashContents { groups, hosts }, now).title()
+            TrashEntry::new(
+                TrashContents {
+                    groups,
+                    hosts,
+                    ..TrashContents::default()
+                },
+                now,
+            )
+            .title()
         };
         assert_eq!(entry(vec![], vec![host("Web")]), "Web");
         assert_eq!(entry(vec![], vec![host("")]), "example.com");
@@ -98,6 +109,7 @@ mod tests {
             TrashContents {
                 groups: vec![Group::new("g", None, now)],
                 hosts: vec![Host::new("h".parse().unwrap(), now)],
+                ..TrashContents::default()
             },
             now,
         );

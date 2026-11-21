@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod forwarding;
 mod hosts;
 mod keychain;
 mod migrations;
